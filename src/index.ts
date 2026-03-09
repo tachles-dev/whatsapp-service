@@ -2,7 +2,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { loadConfig } from './config';
-import { logger } from './logger';
+import { logger, loggerConfig } from './logger';
 import { getRedis } from './redis';
 import { connectionManager } from './connection';
 import { registerRoutes } from './routes';
@@ -14,7 +14,7 @@ async function main(): Promise<void> {
   // Load and validate env vars early
   const config = loadConfig();
 
-  const app = Fastify({ logger });
+  const app = Fastify({ logger: loggerConfig });
 
   // CORS for Next.js frontend calls
   await app.register(cors, {
