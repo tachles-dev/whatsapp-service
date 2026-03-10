@@ -91,7 +91,10 @@ class ConnectionManager {
         keys: makeCacheableSignalKeyStore(state.keys, waLogger),
       },
       logger: waLogger,
-      printQRInTerminal: true,
+      browser: ['WhatsApp Service', 'Safari', '17.0'],
+      connectTimeoutMs: 60_000,
+      keepAliveIntervalMs: 25_000,
+      retryRequestDelayMs: 2000,
       getMessage: async (key) => {
         // Try fetching from Redis message store
         const redis = getRedis();
