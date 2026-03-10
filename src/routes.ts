@@ -3,6 +3,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { connectionManager } from './connection';
 import { loadConfig } from './config';
+import { getRedis } from './redis';
 import { ServiceStatus, ApiResponse } from './types';
 import { logger } from './logger';
 
@@ -49,7 +50,13 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(200).send(ok({ qr: null, message: 'Already connected' }));
     }
 
-    const qr = connectionManager.getQr();
+    // Try in-memory first, then Redis fallback
+    let qr = connectionManager.getQr();
+    if (!qr) {
+      const redis = getRedis();
+      qr = await redis.get('wa:qr');
+    }
+
     if (!qr) {
       return reply.code(404).send(fail('QR_NOT_AVAILABLE', 'QR code not yet generated. Wait for initialization.'));
     }

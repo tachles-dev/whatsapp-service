@@ -172,16 +172,16 @@ class ConnectionManager {
     if (qr) {
       this.qrCode = qr;
       this.status = ServiceStatus.QR_READY;
-      // Store QR in Redis with 60s TTL
+      // Store QR in Redis with 120s TTL (survives one refresh cycle)
       const redis = getRedis();
-      redis.set('wa:qr', qr, 'EX', 60).catch(() => {});
+      redis.set('wa:qr', qr, 'EX', 120).catch(() => {});
       logger.info({ qrLength: qr.length }, 'QR code ready for scanning');
     }
 
     if (connection === 'close') {
       this.status = ServiceStatus.DISCONNECTED;
       this.lastDisconnect = Date.now();
-      this.qrCode = null;
+      // Don't clear qrCode here — keep serving the last QR until a new one arrives or we connect
 
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
       const loggedOut = statusCode === DisconnectReason.loggedOut;
@@ -233,6 +233,7 @@ class ConnectionManager {
       this.connectedAt = Date.now();
       this.reconnectAttempts = 0;
       this.qrCode = null;
+      getRedis().del('wa:qr').catch(() => {});
       logger.info('WhatsApp connected');
     }
   }
