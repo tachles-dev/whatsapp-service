@@ -75,6 +75,7 @@ class ConnectionManager {
   }
 
   async start(): Promise<void> {
+    logger.info({ reconnectAttempts: this.reconnectAttempts }, 'start() called — initializing Baileys socket');
     // Close any existing socket before creating a new one
     this.cleanupSocket();
 
@@ -82,7 +83,7 @@ class ConnectionManager {
     const { state, saveCreds } = await useMultiFileAuthState(config.AUTH_DIR);
 
     const waLogger = logger.child({ module: 'baileys' });
-    waLogger.level = 'warn';
+    waLogger.level = 'info';
 
     this.sock = makeWASocket({
       auth: {
@@ -197,9 +198,8 @@ class ConnectionManager {
 
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
       const loggedOut = statusCode === DisconnectReason.loggedOut;
-
       logger.info(
-        { statusCode, loggedOut, reason: (lastDisconnect?.error as Boom)?.message },
+        { statusCode, loggedOut, reason: (lastDisconnect?.error as Boom)?.message, error: (lastDisconnect?.error as Boom)?.output },
         'Connection closed',
       );
 
