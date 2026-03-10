@@ -28,6 +28,7 @@ export interface ChatMetadata {
   id: string;
   name: string;
   isGroup: boolean;
+  phone: string | null;
 }
 
 export interface InboundMessage {

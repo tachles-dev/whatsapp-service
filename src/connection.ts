@@ -15,7 +15,7 @@ import { loadConfig } from "./config";
 import { logger } from "./logger";
 import { getRedis } from "./redis";
 import { ServiceStatus, InboundMessage, ChatMetadata } from "./types";
-import { isAllowedContact, isNewMessage } from "./filter";
+import { isNewMessage } from './filter';
 import { enqueueMessage } from "./queue";
 
 class ConnectionManager {
@@ -133,59 +133,11 @@ class ConnectionManager {
       this.handleConnectionUpdate(update);
     });
 
-    // Capture contacts (private chats) as they sync
-    this.sock.ev.on("contacts.upsert", async (contacts) => {
-      const redis = getRedis();
-      for (const contact of contacts) {
-        if (!contact.id || contact.id === "status@broadcast") continue;
-        const entry: ChatMetadata = {
-          id: contact.id,
-          name:
-            contact.notify ||
-            contact.verifiedName ||
-            contact.name ||
-            contact.id.split("@")[0],
-          isGroup: contact.id.endsWith("@g.us"),
-        };
-        await redis.hset("wa:chats", contact.id, JSON.stringify(entry));
-      }
-      logger.info({ count: contacts.length }, "Contacts synced to cache");
-    });
-
-    // Capture chat history on initial sync
-    this.sock.ev.on("messaging-history.set", async ({ contacts, isLatest }) => {
-      if (!contacts?.length) return;
-      const redis = getRedis();
-      const pipeline = redis.pipeline();
-      for (const contact of contacts) {
-        if (!contact.id || contact.id === "status@broadcast") continue;
-        const entry: ChatMetadata = {
-          id: contact.id,
-          name:
-            contact.notify ||
-            contact.verifiedName ||
-            contact.name ||
-            contact.id.split("@")[0],
-          isGroup: contact.id.endsWith("@g.us"),
-        };
-        pipeline.hset("wa:chats", contact.id, JSON.stringify(entry));
-      }
-      await pipeline.exec();
-      logger.info(
-        { count: contacts.length, isLatest },
-        "History contacts synced to cache",
-      );
-    });
-
-    // Capture group metadata updates
+    // Keep group metadata up to date for discovery (lightweight, no bulk history)
     this.sock.ev.on("groups.upsert", async (groups) => {
       const redis = getRedis();
       for (const group of groups) {
-        const entry: ChatMetadata = {
-          id: group.id,
-          name: group.subject,
-          isGroup: true,
-        };
+        const entry: ChatMetadata = { id: group.id, name: group.subject, isGroup: true, phone: null };
         await redis.hset("wa:chats", group.id, JSON.stringify(entry));
       }
     });
@@ -196,11 +148,8 @@ class ConnectionManager {
         if (!update.id) continue;
         const existing = await redis.hget("wa:chats", update.id);
         const entry: ChatMetadata = existing
-          ? {
-              ...JSON.parse(existing),
-              ...(update.subject ? { name: update.subject } : {}),
-            }
-          : { id: update.id, name: update.subject || update.id, isGroup: true };
+          ? { ...JSON.parse(existing), ...(update.subject ? { name: update.subject } : {}) }
+          : { id: update.id, name: update.subject || update.id, isGroup: true, phone: null };
         await redis.hset("wa:chats", update.id, JSON.stringify(entry));
       }
     });
@@ -330,12 +279,11 @@ class ConnectionManager {
     const remoteJid = msg.key.remoteJid;
     if (!remoteJid) return;
 
-    // Rule engine: check if sender is allowed
-    if (!isAllowedContact(remoteJid)) {
-      logger.debug(
-        { jid: remoteJid },
-        "Message from non-allowed contact, ignoring",
-      );
+    // Only process messages from explicitly subscribed chats
+    const redis = getRedis();
+    const isSubscribed = await redis.sismember("wa:subscribed", remoteJid);
+    if (!isSubscribed) {
+      logger.debug({ jid: remoteJid }, "Message from non-subscribed chat, ignoring");
       return;
     }
 
@@ -413,7 +361,7 @@ class ConnectionManager {
     const pipeline = redis.pipeline();
 
     for (const [id, meta] of Object.entries(groups)) {
-      const entry: ChatMetadata = { id, name: meta.subject, isGroup: true };
+      const entry: ChatMetadata = { id, name: meta.subject, isGroup: true, phone: null };
       chats.push(entry);
       pipeline.hset("wa:chats", id, JSON.stringify(entry));
     }
@@ -421,6 +369,23 @@ class ConnectionManager {
     await pipeline.exec();
     logger.info({ count: chats.length }, "Chat cache seeded from group fetch");
     return chats;
+  }
+
+  async subscribe(jid: string): Promise<void> {
+    const redis = getRedis();
+    await redis.sadd("wa:subscribed", jid);
+    logger.info({ jid }, "Subscribed to chat");
+  }
+
+  async unsubscribe(jid: string): Promise<void> {
+    const redis = getRedis();
+    await redis.srem("wa:subscribed", jid);
+    logger.info({ jid }, "Unsubscribed from chat");
+  }
+
+  async getSubscribed(): Promise<string[]> {
+    const redis = getRedis();
+    return redis.smembers("wa:subscribed");
   }
 
   async resetAuth(): Promise<void> {
