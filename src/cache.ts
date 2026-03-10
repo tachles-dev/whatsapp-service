@@ -10,7 +10,8 @@ export class DeviceCache {
   // messageId -> expiry timestamp (ms). Avoids all Redis dedup calls.
   private dedupMap = new Map<string, number>();
   private dedupCleanupTimer: ReturnType<typeof setInterval> | null = null;
-  private chatsDirty = false;
+  // Track only the IDs of chats that changed — avoids rewriting all chats on every flush
+  private dirtyChatIds = new Set<string>();
   private chatFlushTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly deviceId: string) {}
@@ -38,7 +39,8 @@ export class DeviceCache {
     );
 
     this.dedupCleanupTimer = setInterval(() => this.cleanupDedup(), 60_000);
-    this.chatFlushTimer = setInterval(() => this.flushChats(), 5 * 60_000);
+    // Flush every 15min instead of 5min — reduces Redis writes 3x
+    this.chatFlushTimer = setInterval(() => this.flushChats(), 15 * 60_000);
   }
 
   // ── Deduplication ────────────────────────────────────────────────────────
@@ -82,7 +84,7 @@ export class DeviceCache {
 
   setChat(entry: ChatMetadata): void {
     this.chats.set(entry.id, entry);
-    this.chatsDirty = true;
+    this.dirtyChatIds.add(entry.id);
   }
 
   getChat(jid: string): ChatMetadata | undefined {
@@ -105,16 +107,17 @@ export class DeviceCache {
   // ── Persistence ──────────────────────────────────────────────────────────
 
   async flushChats(): Promise<void> {
-    if (!this.chatsDirty || this.chats.size === 0) return;
+    if (this.dirtyChatIds.size === 0) return;
     try {
       const redis = getRedis();
       const pipeline = redis.pipeline();
-      for (const entry of this.chats.values()) {
-        pipeline.hset(this.key('chats'), entry.id, JSON.stringify(entry));
+      for (const id of this.dirtyChatIds) {
+        const entry = this.chats.get(id);
+        if (entry) pipeline.hset(this.key('chats'), id, JSON.stringify(entry));
       }
       await pipeline.exec();
-      this.chatsDirty = false;
-      logger.debug({ deviceId: this.deviceId, count: this.chats.size }, 'Chat cache flushed to Redis');
+      logger.debug({ deviceId: this.deviceId, count: this.dirtyChatIds.size }, 'Chat cache flushed to Redis');
+      this.dirtyChatIds.clear();
     } catch (err) {
       logger.warn({ deviceId: this.deviceId, err }, 'Failed to flush chat cache to Redis');
     }

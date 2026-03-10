@@ -2,21 +2,21 @@
 import { Queue, Worker, Job } from 'bullmq';
 import { loadConfig } from './config';
 import { logger } from './logger';
-import { InboundMessage } from './types';
+import { WebhookEvent } from './types';
 import { deliverWebhook } from './webhook';
 
 const QUEUE_NAME = 'webhook-delivery';
 
-let webhookQueue: Queue | null = null;
+let webhookQueue: Queue<WebhookEvent> | null = null;
 
 function getRedisOpts() {
   return { connection: { url: loadConfig().REDIS_URL, maxRetriesPerRequest: null } };
 }
 
-export function getWebhookQueue(): Queue {
+export function getWebhookQueue(): Queue<WebhookEvent> {
   if (webhookQueue) return webhookQueue;
 
-  webhookQueue = new Queue(QUEUE_NAME, {
+  webhookQueue = new Queue<WebhookEvent>(QUEUE_NAME, {
     ...getRedisOpts(),
     defaultJobOptions: {
       attempts: 5,
@@ -30,30 +30,45 @@ export function getWebhookQueue(): Queue {
 }
 
 export function startWebhookWorker(): Worker {
-  const worker = new Worker<InboundMessage>(
+  const worker = new Worker<WebhookEvent>(
     QUEUE_NAME,
-    async (job: Job<InboundMessage>) => {
-      logger.info({ msgId: job.data.id, attempt: job.attemptsMade + 1 }, 'Delivering webhook');
+    async (job: Job<WebhookEvent>) => {
+      const eventId = job.data.type === 'message' ? job.data.id : job.data.messageId;
+      logger.info({ eventId, type: job.data.type, attempt: job.attemptsMade + 1 }, 'Delivering webhook');
       await deliverWebhook(job.data);
     },
     {
       ...getRedisOpts(),
       concurrency: 3,
+      // Poll every 1s when idle instead of the 5ms default — major Redis op reduction
+      drainDelay: 1000,
+      // Check for stalled jobs every 5min instead of the 30s default
+      stalledInterval: 300_000,
     },
   );
 
   worker.on('completed', (job) => {
-    logger.info({ msgId: job.data.id }, 'Webhook delivered');
+    const eventId = job.data.type === 'message' ? job.data.id : job.data.messageId;
+    logger.info({ eventId, type: job.data.type }, 'Webhook delivered');
   });
 
   worker.on('failed', (job, err) => {
-    logger.error({ msgId: job?.data.id, err: err.message }, 'Webhook delivery failed');
+    const eventId = job?.data.type === 'message' ? job.data.id : job?.data.messageId;
+    logger.error({ eventId, type: job?.data.type, err: err.message }, 'Webhook delivery failed');
   });
 
   return worker;
 }
 
-export async function enqueueMessage(msg: InboundMessage): Promise<void> {
+export async function enqueueWebhookEvent(event: WebhookEvent): Promise<void> {
   const queue = getWebhookQueue();
-  await queue.add('inbound-message', msg, { jobId: msg.id });
+  // Deduplicate messages by their WhatsApp message ID.
+  // Reactions and receipts get unique IDs so every event is tracked.
+  let jobId: string | undefined;
+  if (event.type === 'message') {
+    jobId = `msg:${event.id}`;
+  } else if (event.type === 'reaction') {
+    jobId = `reaction:${event.messageId}:${event.from}:${event.timestamp}`;
+  }
+  await queue.add('webhook-event', event, jobId ? { jobId } : {});
 }

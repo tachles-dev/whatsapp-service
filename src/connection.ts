@@ -15,8 +15,8 @@ import { loadConfig } from './config';
 import { logger } from './logger';
 import { getRedis } from './redis';
 import { DeviceCache } from './cache';
-import { ServiceStatus, InboundMessage, ChatMetadata } from './types';
-import { enqueueMessage } from './queue';
+import { ServiceStatus, InboundMessage, ReactionEvent, ReceiptEvent, ChatMetadata } from './types';
+import { enqueueWebhookEvent } from './queue';
 
 export class ConnectionManager {
   private sock: WASocket | null = null;
@@ -30,6 +30,19 @@ export class ConnectionManager {
   private maxReconnectAttempts = 10;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private phoneVerifier: ((phone: string) => Promise<boolean>) | null = null;
+  // In-memory cache for msg payloads — avoids Redis reads for Baileys retries/quote lookups
+  private msgCache = new Map<string, { data: string; expiry: number }>();
+
+  private getCachedMsg(key: string): string | null {
+    const entry = this.msgCache.get(key);
+    if (!entry || entry.expiry < Date.now()) { this.msgCache.delete(key); return null; }
+    return entry.data;
+  }
+
+  private setCachedMsg(key: string, data: string): void {
+    this.msgCache.set(key, { data, expiry: Date.now() + 300_000 });
+    if (this.msgCache.size > 500) this.msgCache.delete(this.msgCache.keys().next().value!);
+  }
 
   setPhoneVerifier(cb: (phone: string) => Promise<boolean>): void {
     this.phoneVerifier = cb;
@@ -62,6 +75,8 @@ export class ConnectionManager {
         this.sock.ev.removeAllListeners('messaging-history.set');
         this.sock.ev.removeAllListeners('groups.upsert');
         this.sock.ev.removeAllListeners('groups.update');
+        this.sock.ev.removeAllListeners('messages.reaction');
+        this.sock.ev.removeAllListeners('message-receipt.update');
         this.sock.end(undefined);
       } catch { /* ignore */ }
       this.sock = null;
@@ -108,7 +123,8 @@ export class ConnectionManager {
       retryRequestDelayMs: 2000,
       agent,
       getMessage: async (key) => {
-        const stored = await getRedis().get(`msg:${this.deviceId}:${key.id}`);
+        const cacheKey = `msg:${this.deviceId}:${key.id}`;
+        const stored = this.getCachedMsg(cacheKey) ?? await getRedis().get(cacheKey);
         if (stored) return proto.Message.decode(Buffer.from(stored, 'base64'));
         return proto.Message.fromObject({});
       },
@@ -165,6 +181,54 @@ export class ConnectionManager {
     this.sock.ev.on('messages.upsert', async ({ messages, type }) => {
       if (type !== 'notify') return;
       for (const msg of messages) await this.handleInboundMessage(msg);
+    });
+
+    // Track reactions on messages WE sent (key.fromMe === true)
+    this.sock.ev.on('messages.reaction', async (reactions: any[]) => {
+      for (const { key, reaction } of reactions) {
+        if (!key?.id || !key.fromMe) continue;
+        const event: ReactionEvent = {
+          type: 'reaction',
+          deviceId: this.deviceId,
+          messageId: key.id,
+          from: key.participant || key.remoteJid || '',
+          chatId: key.remoteJid || '',
+          isGroup: (key.remoteJid || '').endsWith('@g.us'),
+          pushName: null,
+          emoji: reaction?.text ?? null,
+          timestamp: Math.floor((Number(reaction?.senderTimestampMs) || Date.now()) / 1000),
+        };
+        await enqueueWebhookEvent(event);
+      }
+    });
+
+    // Track delivery/read receipts for messages WE sent (key.fromMe === true)
+    this.sock.ev.on('message-receipt.update', async (updates: any[]) => {
+      // Group receipts by message key to batch them
+      const byKey = new Map<string, { key: any; updates: any[] }>();
+      for (const { key, update } of updates) {
+        if (!key?.id || !key.fromMe) continue;
+        const existing = byKey.get(key.id);
+        if (existing) existing.updates.push(update);
+        else byKey.set(key.id, { key, updates: [update] });
+      }
+      for (const { key, updates: receipts } of byKey.values()) {
+        const event: ReceiptEvent = {
+          type: 'receipt',
+          deviceId: this.deviceId,
+          messageId: key.id,
+          chatId: key.remoteJid || '',
+          isGroup: (key.remoteJid || '').endsWith('@g.us'),
+          receipts: receipts.map((u: any) => ({
+            participantJid: u.userJid || '',
+            type: u.readTimestamp ? 'READ' : u.receiptTimestamp ? 'DELIVERY' : 'SERVER_ACK',
+            readTimestamp: u.readTimestamp,
+            receiptTimestamp: u.receiptTimestamp,
+          })),
+          timestamp: Math.floor(Date.now() / 1000),
+        };
+        await enqueueWebhookEvent(event);
+      }
     });
   }
 
@@ -250,7 +314,9 @@ export class ConnectionManager {
 
     if (msg.message) {
       const encoded = Buffer.from(proto.Message.encode(msg.message).finish()).toString('base64');
-      await getRedis().set(`msg:${this.deviceId}:${messageId}`, encoded, 'EX', 3600);
+      const msgKey = `msg:${this.deviceId}:${messageId}`;
+      this.setCachedMsg(msgKey, encoded);
+      await getRedis().set(msgKey, encoded, 'EX', 3600);
     }
 
     const text =
@@ -261,6 +327,7 @@ export class ConnectionManager {
       null;
 
     const inbound: InboundMessage = {
+      type: 'message',
       deviceId: this.deviceId,
       id: messageId,
       from: msg.key.participant || remoteJid,
@@ -271,7 +338,7 @@ export class ConnectionManager {
       pushName: msg.pushName || null,
     };
 
-    await enqueueMessage(inbound);
+    await enqueueWebhookEvent(inbound);
   }
 
   async sendMessage(jid: string, text: string, quotedId?: string): Promise<string> {

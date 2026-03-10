@@ -1,13 +1,13 @@
 // webhook.ts
 import { loadConfig } from './config';
 import { logger } from './logger';
-import { InboundMessage } from './types';
+import { WebhookEvent } from './types';
 
 /**
- * Deliver a message payload to the Next.js webhook endpoint.
+ * Deliver a webhook event payload to the Next.js endpoint.
  * Throws on failure so BullMQ can retry with exponential backoff.
  */
-export async function deliverWebhook(message: InboundMessage): Promise<void> {
+export async function deliverWebhook(message: WebhookEvent): Promise<void> {
   const config = loadConfig();
 
   const res = await fetch(config.WEBHOOK_URL, {

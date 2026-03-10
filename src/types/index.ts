@@ -32,6 +32,7 @@ export interface ChatMetadata {
 }
 
 export interface InboundMessage {
+  type: 'message';
   deviceId: string;
   id: string;
   from: string;
@@ -41,6 +42,40 @@ export interface InboundMessage {
   isGroup: boolean;
   pushName: string | null;
 }
+
+export interface ReactionEvent {
+  type: 'reaction';
+  deviceId: string;
+  /** ID of the message that was reacted to (matches the msgId returned by sendMessage). */
+  messageId: string;
+  /** JID of the person who reacted. */
+  from: string;
+  chatId: string;
+  isGroup: boolean;
+  pushName: string | null;
+  /** The emoji used, or null/empty-string when the reaction was removed. */
+  emoji: string | null;
+  timestamp: number;
+}
+
+export interface ReceiptEvent {
+  type: 'receipt';
+  deviceId: string;
+  /** ID of the message being acknowledged. */
+  messageId: string;
+  chatId: string;
+  isGroup: boolean;
+  receipts: {
+    participantJid: string;
+    /** 'READ' | 'DELIVERY' | 'PLAYED' | 'SERVER_ACK' */
+    type: string;
+    readTimestamp?: number;
+    receiptTimestamp?: number;
+  }[];
+  timestamp: number;
+}
+
+export type WebhookEvent = InboundMessage | ReactionEvent | ReceiptEvent;
 
 export interface StatusData {
   status: ServiceStatus;
