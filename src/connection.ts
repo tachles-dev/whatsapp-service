@@ -49,6 +49,23 @@ class ConnectionManager {
   }
 
   async start(): Promise<void> {
+    // Close any existing socket before creating a new one
+    if (this.sock) {
+      try {
+        this.sock.ev.removeAllListeners('connection.update');
+        this.sock.ev.removeAllListeners('creds.update');
+        this.sock.ev.removeAllListeners('messages.upsert');
+        this.sock.ev.removeAllListeners('contacts.upsert');
+        this.sock.ev.removeAllListeners('messaging-history.set');
+        this.sock.ev.removeAllListeners('groups.upsert');
+        this.sock.ev.removeAllListeners('groups.update');
+        this.sock.end(undefined);
+      } catch {
+        // ignore cleanup errors
+      }
+      this.sock = null;
+    }
+
     const config = loadConfig();
     const { state, saveCreds } = await useMultiFileAuthState(config.AUTH_DIR);
 
@@ -158,7 +175,7 @@ class ConnectionManager {
       // Store QR in Redis with 60s TTL
       const redis = getRedis();
       redis.set('wa:qr', qr, 'EX', 60).catch(() => {});
-      logger.info('QR code ready for scanning');
+      logger.info({ qrLength: qr.length }, 'QR code ready for scanning');
     }
 
     if (connection === 'close') {
@@ -166,8 +183,13 @@ class ConnectionManager {
       this.lastDisconnect = Date.now();
       this.qrCode = null;
 
-      const error = (lastDisconnect?.error as Boom)?.output?.statusCode;
-      const loggedOut = error === DisconnectReason.loggedOut;
+      const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
+      const loggedOut = statusCode === DisconnectReason.loggedOut;
+
+      logger.info(
+        { statusCode, loggedOut, reason: (lastDisconnect?.error as Boom)?.message },
+        'Connection closed',
+      );
 
       if (loggedOut) {
         logger.warn('Session logged out — clearing auth and restarting for new QR');
