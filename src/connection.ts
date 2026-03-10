@@ -8,6 +8,7 @@ import makeWASocket, {
   makeCacheableSignalKeyStore,
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
+import { SocksProxyAgent } from 'socks-proxy-agent';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { loadConfig } from './config';
@@ -85,6 +86,11 @@ class ConnectionManager {
     const waLogger = logger.child({ module: 'baileys' });
     waLogger.level = 'info';
 
+    const agent = config.PROXY_URL ? new SocksProxyAgent(config.PROXY_URL) : undefined;
+    if (config.PROXY_URL) {
+      logger.info({ proxy: config.PROXY_URL.replace(/:[^:@]+@/, ':***@') }, 'Using SOCKS5 proxy');
+    }
+
     this.sock = makeWASocket({
       auth: {
         creds: state.creds,
@@ -95,6 +101,7 @@ class ConnectionManager {
       connectTimeoutMs: 60_000,
       keepAliveIntervalMs: 25_000,
       retryRequestDelayMs: 2000,
+      agent,
       getMessage: async (key) => {
         // Try fetching from Redis message store
         const redis = getRedis();
@@ -246,6 +253,7 @@ class ConnectionManager {
       } else {
         logger.error('Max reconnect attempts reached — entering ERROR state, will retry in 5 minutes');
         this.status = ServiceStatus.ERROR;
+        this.reconnectAttempts = 0;
         // Schedule a full recovery attempt after 5 minutes
         this.scheduleRestart(5 * 60 * 1000);
       }

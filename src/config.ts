@@ -9,6 +9,7 @@ const envSchema = z.object({
   AUTH_DIR: z.string().default('/data/auth'),
   WEBHOOK_URL: z.string().url(),
   WEBHOOK_API_KEY: z.string().min(1),
+  PROXY_URL: z.string().optional(),
   ALLOWED_CONTACTS: z
     .string()
     .default('')
