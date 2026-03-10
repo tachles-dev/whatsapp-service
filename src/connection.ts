@@ -8,6 +8,8 @@ import makeWASocket, {
   makeCacheableSignalKeyStore,
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 import { loadConfig } from './config';
 import { logger } from './logger';
 import { getRedis } from './redis';
@@ -79,6 +81,64 @@ class ConnectionManager {
       this.handleConnectionUpdate(update);
     });
 
+    // Capture contacts (private chats) as they sync
+    this.sock.ev.on('contacts.upsert', async (contacts) => {
+      const redis = getRedis();
+      for (const contact of contacts) {
+        if (!contact.id || contact.id === 'status@broadcast') continue;
+        const entry: ChatMetadata = {
+          id: contact.id,
+          name: contact.notify || contact.verifiedName || contact.name || contact.id.split('@')[0],
+          isGroup: contact.id.endsWith('@g.us'),
+        };
+        await redis.hset('wa:chats', contact.id, JSON.stringify(entry));
+      }
+      logger.info({ count: contacts.length }, 'Contacts synced to cache');
+    });
+
+    // Capture chat history on initial sync
+    this.sock.ev.on('messaging-history.set', async ({ contacts, isLatest }) => {
+      if (!contacts?.length) return;
+      const redis = getRedis();
+      const pipeline = redis.pipeline();
+      for (const contact of contacts) {
+        if (!contact.id || contact.id === 'status@broadcast') continue;
+        const entry: ChatMetadata = {
+          id: contact.id,
+          name: contact.notify || contact.verifiedName || contact.name || contact.id.split('@')[0],
+          isGroup: contact.id.endsWith('@g.us'),
+        };
+        pipeline.hset('wa:chats', contact.id, JSON.stringify(entry));
+      }
+      await pipeline.exec();
+      logger.info({ count: contacts.length, isLatest }, 'History contacts synced to cache');
+    });
+
+    // Capture group metadata updates
+    this.sock.ev.on('groups.upsert', async (groups) => {
+      const redis = getRedis();
+      for (const group of groups) {
+        const entry: ChatMetadata = {
+          id: group.id,
+          name: group.subject,
+          isGroup: true,
+        };
+        await redis.hset('wa:chats', group.id, JSON.stringify(entry));
+      }
+    });
+
+    this.sock.ev.on('groups.update', async (updates) => {
+      const redis = getRedis();
+      for (const update of updates) {
+        if (!update.id) continue;
+        const existing = await redis.hget('wa:chats', update.id);
+        const entry: ChatMetadata = existing
+          ? { ...JSON.parse(existing), ...(update.subject ? { name: update.subject } : {}) }
+          : { id: update.id, name: update.subject || update.id, isGroup: true };
+        await redis.hset('wa:chats', update.id, JSON.stringify(entry));
+      }
+    });
+
     // Inbound message handler
     this.sock.ev.on('messages.upsert', async ({ messages, type }) => {
       if (type !== 'notify') return;
@@ -89,7 +149,7 @@ class ConnectionManager {
     });
   }
 
-  private handleConnectionUpdate(update: Partial<ConnectionState>): void {
+  private async handleConnectionUpdate(update: Partial<ConnectionState>): Promise<void> {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
@@ -110,8 +170,24 @@ class ConnectionManager {
       const loggedOut = error === DisconnectReason.loggedOut;
 
       if (loggedOut) {
-        logger.warn('Session logged out — requires new QR scan');
-        this.status = ServiceStatus.ERROR;
+        logger.warn('Session logged out — clearing auth and restarting for new QR');
+        this.status = ServiceStatus.DISCONNECTED;
+
+        // Clear stale auth files so a fresh QR is generated
+        const config = loadConfig();
+        try {
+          const files = await fs.readdir(config.AUTH_DIR);
+          await Promise.all(
+            files.map((f) => fs.rm(path.join(config.AUTH_DIR, f), { recursive: true, force: true })),
+          );
+          logger.info('Auth files cleared');
+        } catch (err) {
+          logger.error({ err }, 'Failed to clear auth files');
+        }
+
+        // Restart to generate a new QR code
+        this.reconnectAttempts = 0;
+        setTimeout(() => this.start(), 3000);
         return;
       }
 
@@ -206,13 +282,27 @@ class ConnectionManager {
       throw new Error('WhatsApp is not connected');
     }
 
-    const groups = await this.sock.groupFetchAllParticipating();
-    const chats: ChatMetadata[] = Object.entries(groups).map(([id, meta]) => ({
-      id,
-      name: meta.subject,
-      isGroup: true,
-    }));
+    const redis = getRedis();
+    const cached = await redis.hgetall('wa:chats');
 
+    // If cache has entries, return from cache (no socket call)
+    if (Object.keys(cached).length > 0) {
+      return Object.values(cached).map((v) => JSON.parse(v) as ChatMetadata);
+    }
+
+    // Cache is empty — do a one-time group fetch to seed it
+    const groups = await this.sock.groupFetchAllParticipating();
+    const chats: ChatMetadata[] = [];
+    const pipeline = redis.pipeline();
+
+    for (const [id, meta] of Object.entries(groups)) {
+      const entry: ChatMetadata = { id, name: meta.subject, isGroup: true };
+      chats.push(entry);
+      pipeline.hset('wa:chats', id, JSON.stringify(entry));
+    }
+
+    await pipeline.exec();
+    logger.info({ count: chats.length }, 'Chat cache seeded from group fetch');
     return chats;
   }
 
