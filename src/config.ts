@@ -6,7 +6,7 @@ const envSchema = z.object({
   HOST: z.string().default('0.0.0.0'),
   API_KEY: z.string().min(1, 'API_KEY is required'),
   REDIS_URL: z.string().url().default('redis://localhost:6379'),
-  AUTH_DIR: z.string().default('/data/auth'),
+  AUTH_BASE_DIR: z.string().default('/data/auth'),
   WEBHOOK_URL: z.string().url(),
   WEBHOOK_API_KEY: z.string().min(1),
   PROXY_URL: z.string().optional(),

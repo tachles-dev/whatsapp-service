@@ -4,11 +4,11 @@ import cors from '@fastify/cors';
 import { loadConfig } from './config';
 import { logger, loggerConfig } from './logger';
 import { getRedis } from './redis';
-import { connectionManager } from './connection';
 import { registerRoutes } from './routes';
 import { startWebhookWorker } from './queue';
 import { startHeartbeat } from './heartbeat';
 import { setupGracefulShutdown } from './shutdown';
+import { deviceManager } from './device-manager';
 
 async function main(): Promise<void> {
   // Load and validate env vars early
@@ -19,12 +19,15 @@ async function main(): Promise<void> {
   // CORS for Next.js frontend calls
   await app.register(cors, {
     origin: true,
-    methods: ['GET', 'POST'],
+    methods: ['GET', 'POST', 'DELETE'],
   });
 
   // Connect Redis
   const redis = getRedis();
   await redis.connect();
+
+  // Restore all previously registered devices from Redis
+  await deviceManager.loadFromRedis();
 
   // Register API routes
   await registerRoutes(app);
@@ -38,9 +41,6 @@ async function main(): Promise<void> {
   // Start HTTP server
   await app.listen({ port: config.PORT, host: config.HOST });
   logger.info({ port: config.PORT }, 'WhatsApp Gateway Service started');
-
-  // Start WhatsApp connection
-  await connectionManager.start();
 
   // Start heartbeat pings to Next.js backend
   startHeartbeat();

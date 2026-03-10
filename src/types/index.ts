@@ -32,6 +32,7 @@ export interface ChatMetadata {
 }
 
 export interface InboundMessage {
+  deviceId: string;
   id: string;
   from: string;
   chatId: string;
@@ -47,6 +48,19 @@ export interface StatusData {
   connectedAt: number | null;
   lastDisconnect: number | null;
   qr: string | null;
+}
+
+export interface DeviceInfo {
+  id: string;
+  name: string;
+  createdAt: number;
+  /** WhatsApp phone number (digits only), set once the QR is scanned and confirmed. */
+  phone: string | null;
+}
+
+export interface DeviceStatusData extends StatusData {
+  deviceId: string;
+  deviceName: string;
 }
 
 export interface QrData {

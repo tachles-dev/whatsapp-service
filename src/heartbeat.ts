@@ -1,52 +1,51 @@
 // heartbeat.ts
 import { loadConfig } from './config';
 import { logger } from './logger';
-import { connectionManager } from './connection';
+import { deviceManager } from './device-manager';
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
- * Sends a periodic heartbeat ping to the Next.js backend
- * to confirm the WhatsApp link is active.
+ * Sends a periodic heartbeat ping for every active device.
  */
 export function startHeartbeat(): void {
   const config = loadConfig();
 
   heartbeatTimer = setInterval(async () => {
-    try {
-      const statusData = connectionManager.getStatusData();
+    const allInfos = deviceManager.getAllInfos();
 
-      // Log status every heartbeat so Render logs show live state
-      logger.info(
-        {
-          status: statusData.status,
-          uptime: Math.round(statusData.uptime / 1000) + 's',
-          connectedAt: statusData.connectedAt,
-          hasQr: statusData.qr !== null,
-        },
-        'Heartbeat',
-      );
+    for (const info of allInfos) {
+      const manager = deviceManager.getManager(info.id);
+      if (!manager) continue;
 
-      const res = await fetch(config.WEBHOOK_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': config.WEBHOOK_API_KEY,
-        },
-        body: JSON.stringify({
-          type: 'heartbeat',
-          ...statusData,
-        }),
-        signal: AbortSignal.timeout(5000),
-      });
+      try {
+        const statusData = manager.getStatusData();
 
-      if (!res.ok) {
-        logger.warn({ status: res.status }, 'Heartbeat ping failed');
-      } else {
-        logger.debug('Heartbeat sent');
+        logger.info(
+          {
+            deviceId: info.id,
+            status: statusData.status,
+            uptime: Math.round(statusData.uptime / 1000) + 's',
+          },
+          'Heartbeat',
+        );
+
+        const res = await fetch(config.WEBHOOK_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': config.WEBHOOK_API_KEY,
+          },
+          body: JSON.stringify({ type: 'heartbeat', ...statusData }),
+          signal: AbortSignal.timeout(5000),
+        });
+
+        if (!res.ok) {
+          logger.warn({ status: res.status, deviceId: info.id }, 'Heartbeat ping failed');
+        }
+      } catch (err) {
+        logger.warn({ err, deviceId: info.id }, 'Heartbeat ping error');
       }
-    } catch (err) {
-      logger.warn({ err }, 'Heartbeat ping error');
     }
   }, config.HEARTBEAT_INTERVAL);
 }

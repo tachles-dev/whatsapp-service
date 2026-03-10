@@ -11,23 +11,38 @@ import { Boom } from "@hapi/boom";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { loadConfig } from "./config";
-import { logger } from "./logger";
-import { getRedis } from "./redis";
-import { ServiceStatus, InboundMessage, ChatMetadata } from "./types";
-import { isNewMessage } from './filter';
-import { enqueueMessage } from "./queue";
+import { loadConfig } from './config';
+import { logger } from './logger';
+import { getRedis } from './redis';
+import { DeviceCache } from './cache';
+import { ServiceStatus, InboundMessage, ChatMetadata } from './types';
+import { enqueueMessage } from './queue';
 
-class ConnectionManager {
+export class ConnectionManager {
   private sock: WASocket | null = null;
   private status: ServiceStatus = ServiceStatus.INITIALIZING;
   private qrCode: string | null = null;
+  private connectedPhone: string | null = null;
   private connectedAt: number | null = null;
   private lastDisconnect: number | null = null;
   private startTime = Date.now();
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 10;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
+  private phoneVerifier: ((phone: string) => Promise<boolean>) | null = null;
+
+  setPhoneVerifier(cb: (phone: string) => Promise<boolean>): void {
+    this.phoneVerifier = cb;
+  }
+
+  getConnectedPhone(): string | null { return this.connectedPhone; }
+
+  constructor(
+    readonly deviceId: string,
+    readonly clientId: string,
+    private readonly authDir: string,
+    private readonly cache: DeviceCache,
+  ) {}
 
   private scheduleRestart(delayMs: number): void {
     if (this.restartTimer) clearTimeout(this.restartTimer);
@@ -40,31 +55,27 @@ class ConnectionManager {
   private cleanupSocket(): void {
     if (this.sock) {
       try {
-        this.sock.ev.removeAllListeners("connection.update");
-        this.sock.ev.removeAllListeners("creds.update");
-        this.sock.ev.removeAllListeners("messages.upsert");
-        this.sock.ev.removeAllListeners("contacts.upsert");
-        this.sock.ev.removeAllListeners("messaging-history.set");
-        this.sock.ev.removeAllListeners("groups.upsert");
-        this.sock.ev.removeAllListeners("groups.update");
+        this.sock.ev.removeAllListeners('connection.update');
+        this.sock.ev.removeAllListeners('creds.update');
+        this.sock.ev.removeAllListeners('messages.upsert');
+        this.sock.ev.removeAllListeners('contacts.upsert');
+        this.sock.ev.removeAllListeners('messaging-history.set');
+        this.sock.ev.removeAllListeners('groups.upsert');
+        this.sock.ev.removeAllListeners('groups.update');
         this.sock.end(undefined);
-      } catch {
-        /* ignore */
-      }
+      } catch { /* ignore */ }
       this.sock = null;
     }
   }
 
-  getStatus(): ServiceStatus {
-    return this.status;
-  }
-
-  getQr(): string | null {
-    return this.qrCode;
-  }
+  getStatus(): ServiceStatus { return this.status; }
+  getQr(): string | null { return this.qrCode; }
+  getSocket(): WASocket | null { return this.sock; }
 
   getStatusData() {
     return {
+      deviceId: this.deviceId,
+      phone: this.connectedPhone,
       status: this.status,
       uptime: Date.now() - this.startTime,
       connectedAt: this.connectedAt,
@@ -73,33 +84,16 @@ class ConnectionManager {
     };
   }
 
-  getSocket(): WASocket | null {
-    return this.sock;
-  }
-
   async start(): Promise<void> {
-    logger.info(
-      { reconnectAttempts: this.reconnectAttempts },
-      "start() called — initializing Baileys socket",
-    );
-    // Close any existing socket before creating a new one
+    logger.info({ deviceId: this.deviceId, reconnectAttempts: this.reconnectAttempts }, 'start() called');
     this.cleanupSocket();
 
     const config = loadConfig();
-    const { state, saveCreds } = await useMultiFileAuthState(config.AUTH_DIR);
+    const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
+    const waLogger = logger.child({ module: 'baileys', deviceId: this.deviceId });
+    waLogger.level = 'info';
 
-    const waLogger = logger.child({ module: "baileys" });
-    waLogger.level = "info";
-
-    const agent = config.PROXY_URL
-      ? new SocksProxyAgent(config.PROXY_URL)
-      : undefined;
-    if (config.PROXY_URL) {
-      logger.info(
-        { proxy: config.PROXY_URL.replace(/:[^:@]+@/, ":***@") },
-        "Using SOCKS5 proxy",
-      );
-    }
+    const agent = config.PROXY_URL ? new SocksProxyAgent(config.PROXY_URL) : undefined;
 
     this.sock = makeWASocket({
       auth: {
@@ -107,7 +101,6 @@ class ConnectionManager {
         keys: makeCacheableSignalKeyStore(state.keys, waLogger),
       },
       version: [2, 3000, 1033893291],
-
       logger: waLogger,
       browser: ['Chrome', 'Windows', '110.0.5481.177'],
       connectTimeoutMs: 60_000,
@@ -115,195 +108,151 @@ class ConnectionManager {
       retryRequestDelayMs: 2000,
       agent,
       getMessage: async (key) => {
-        // Try fetching from Redis message store
-        const redis = getRedis();
-        const stored = await redis.get(`msg:${key.id}`);
-        if (stored) {
-          return proto.Message.decode(Buffer.from(stored, "base64"));
-        }
+        const stored = await getRedis().get(`msg:${this.deviceId}:${key.id}`);
+        if (stored) return proto.Message.decode(Buffer.from(stored, 'base64'));
         return proto.Message.fromObject({});
       },
     });
 
-    // Persist credentials on update
-    this.sock.ev.on("creds.update", saveCreds);
-
-    // Connection state management
-    this.sock.ev.on("connection.update", (update: Partial<ConnectionState>) => {
+    this.sock.ev.on('creds.update', saveCreds);
+    this.sock.ev.on('connection.update', (update: Partial<ConnectionState>) => {
       this.handleConnectionUpdate(update);
     });
 
-    // Keep group metadata up to date for discovery (lightweight, no bulk history)
-    this.sock.ev.on("groups.upsert", async (groups) => {
-      const redis = getRedis();
+    this.sock.ev.on('groups.upsert', (groups) => {
       for (const group of groups) {
-        const entry: ChatMetadata = { id: group.id, name: group.subject, isGroup: true, phone: null };
-        await redis.hset("wa:chats", group.id, JSON.stringify(entry));
+        this.cache.setChat({ id: group.id, name: group.subject, isGroup: true, phone: null });
       }
     });
 
-    this.sock.ev.on("groups.update", async (updates) => {
-      const redis = getRedis();
+    this.sock.ev.on('groups.update', (updates) => {
       for (const update of updates) {
         if (!update.id) continue;
-        const existing = await redis.hget("wa:chats", update.id);
-        const entry: ChatMetadata = existing
-          ? { ...JSON.parse(existing), ...(update.subject ? { name: update.subject } : {}) }
-          : { id: update.id, name: update.subject || update.id, isGroup: true, phone: null };
-        await redis.hset("wa:chats", update.id, JSON.stringify(entry));
+        const existing = this.cache.getChat(update.id);
+        this.cache.setChat(
+          existing
+            ? { ...existing, ...(update.subject ? { name: update.subject } : {}) }
+            : { id: update.id, name: update.subject || update.id, isGroup: true, phone: null },
+        );
       }
     });
 
-    // Inbound message handler
-    this.sock.ev.on("messages.upsert", async ({ messages, type }) => {
-      if (type !== "notify") return;
-
-      for (const msg of messages) {
-        await this.handleInboundMessage(msg);
+    this.sock.ev.on('contacts.upsert', (contacts) => {
+      for (const contact of contacts) {
+        if (!contact.id || contact.id === 'status@broadcast') continue;
+        this.cache.setChat({
+          id: contact.id,
+          name: contact.notify || contact.verifiedName || contact.name || contact.id.split('@')[0],
+          isGroup: contact.id.endsWith('@g.us'),
+          phone: contact.id.endsWith('@s.whatsapp.net') ? contact.id.split('@')[0] : null,
+        });
       }
+    });
+
+    this.sock.ev.on('messaging-history.set', ({ contacts }) => {
+      if (!contacts?.length) return;
+      for (const contact of contacts) {
+        if (!contact.id || contact.id === 'status@broadcast') continue;
+        this.cache.setChat({
+          id: contact.id,
+          name: contact.notify || contact.verifiedName || contact.name || contact.id.split('@')[0],
+          isGroup: contact.id.endsWith('@g.us'),
+          phone: contact.id.endsWith('@s.whatsapp.net') ? contact.id.split('@')[0] : null,
+        });
+      }
+    });
+
+    this.sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      if (type !== 'notify') return;
+      for (const msg of messages) await this.handleInboundMessage(msg);
     });
   }
 
-  private async handleConnectionUpdate(
-    update: Partial<ConnectionState>,
-  ): Promise<void> {
+  private async handleConnectionUpdate(update: Partial<ConnectionState>): Promise<void> {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
       this.qrCode = qr;
       this.status = ServiceStatus.QR_READY;
-      // Store QR in Redis with 120s TTL (survives one refresh cycle)
-      const redis = getRedis();
-      redis.set("wa:qr", qr, "EX", 120).catch(() => {});
-      logger.info({ qrLength: qr.length }, "QR code ready — waiting for scan");
+      logger.info({ deviceId: this.deviceId, qrLength: qr.length }, 'QR code ready — waiting for scan');
     }
 
-    if (connection === "close") {
+    if (connection === 'close') {
       this.status = ServiceStatus.DISCONNECTED;
       this.lastDisconnect = Date.now();
-      // Don't clear qrCode here — keep serving the last QR until a new one arrives or we connect
-
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
       const loggedOut = statusCode === DisconnectReason.loggedOut;
-      logger.info(
-        {
-          statusCode,
-          loggedOut,
-          reason: (lastDisconnect?.error as Boom)?.message,
-          error: (lastDisconnect?.error as Boom)?.output,
-        },
-        "Connection closed",
-      );
+      logger.info({ deviceId: this.deviceId, statusCode, loggedOut, reason: (lastDisconnect?.error as Boom)?.message }, 'Connection closed');
 
       if (loggedOut) {
-        logger.warn(
-          "Session logged out — clearing auth and restarting for new QR",
-        );
-        this.status = ServiceStatus.DISCONNECTED;
-
-        // Cancel any pending restart
-        if (this.restartTimer) {
-          clearTimeout(this.restartTimer);
-          this.restartTimer = null;
-        }
-
-        // Clear stale auth files so a fresh QR is generated
-        const config = loadConfig();
+        logger.warn({ deviceId: this.deviceId }, 'Session logged out — clearing auth and restarting for new QR');
+        if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
+        this.cleanupSocket();
         try {
-          const files = await fs.readdir(config.AUTH_DIR);
-          await Promise.all(
-            files.map((f) =>
-              fs.rm(path.join(config.AUTH_DIR, f), {
-                recursive: true,
-                force: true,
-              }),
-            ),
-          );
-          logger.info("Auth files cleared");
-        } catch (err) {
-          logger.error({ err }, "Failed to clear auth files");
-        }
-
-        // Restart to generate a new QR code
+          const files = await fs.readdir(this.authDir);
+          await Promise.all(files.map((f) => fs.rm(path.join(this.authDir, f), { recursive: true, force: true })));
+        } catch { /* ignore */ }
         this.reconnectAttempts = 0;
         this.scheduleRestart(3000);
         return;
       }
 
-      // Auto-reconnect with exponential backoff
       if (this.reconnectAttempts < this.maxReconnectAttempts) {
-        const delay = Math.min(
-          1000 * Math.pow(2, this.reconnectAttempts),
-          60_000,
-        );
+        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 60_000);
         this.reconnectAttempts++;
-        logger.info(
-          {
-            attempt: this.reconnectAttempts,
-            maxAttempts: this.maxReconnectAttempts,
-            delayMs: delay,
-          },
-          "Reconnecting...",
-        );
+        logger.info({ deviceId: this.deviceId, attempt: this.reconnectAttempts, maxAttempts: this.maxReconnectAttempts, delayMs: delay }, 'Reconnecting...');
         this.scheduleRestart(delay);
       } else {
-        logger.error(
-          "Max reconnect attempts reached — entering ERROR state, will retry in 5 minutes",
-        );
+        logger.error({ deviceId: this.deviceId }, 'Max reconnect attempts reached — entering ERROR state, will retry in 5 minutes');
         this.status = ServiceStatus.ERROR;
         this.reconnectAttempts = 0;
-        // Schedule a full recovery attempt after 5 minutes
         this.scheduleRestart(5 * 60 * 1000);
       }
     }
 
-    if (connection === "open") {
+    if (connection === 'open') {
+      // Extract phone from sock.user.id format: "972501234567:13@s.whatsapp.net"
+      const rawId = this.sock?.user?.id ?? '';
+      const phone = rawId.split('@')[0].split(':')[0] || null;
+      this.connectedPhone = phone;
+
+      if (phone && this.phoneVerifier) {
+        const allowed = await this.phoneVerifier(phone);
+        if (!allowed) {
+          // phoneVerifier already logged the reason; close silently
+          await this.close();
+          return;
+        }
+      }
+
       this.status = ServiceStatus.CONNECTED;
       this.connectedAt = Date.now();
       this.reconnectAttempts = 0;
       this.qrCode = null;
-      getRedis()
-        .del("wa:qr")
-        .catch(() => {});
-      logger.info("WhatsApp connected");
+      logger.info({ deviceId: this.deviceId, phone }, 'WhatsApp connected');
     }
   }
 
-  private async handleInboundMessage(
-    msg: proto.IWebMessageInfo,
-  ): Promise<void> {
+  private async handleInboundMessage(msg: proto.IWebMessageInfo): Promise<void> {
     if (!msg.key) return;
-    // Skip own messages
     if (msg.key.fromMe) return;
-
     const remoteJid = msg.key.remoteJid;
     if (!remoteJid) return;
 
-    // Only process messages from explicitly subscribed chats
-    const redis = getRedis();
-    const isSubscribed = await redis.sismember("wa:subscribed", remoteJid);
-    if (!isSubscribed) {
-      logger.debug({ jid: remoteJid }, "Message from non-subscribed chat, ignoring");
+    if (!this.cache.isSubscribed(remoteJid)) {
+      logger.debug({ deviceId: this.deviceId, jid: remoteJid }, 'Message from non-subscribed chat, ignoring');
       return;
     }
 
     const messageId = msg.key.id;
     if (!messageId) return;
+    if (!this.cache.isNewMessage(messageId)) return;
 
-    // Deduplication
-    const isNew = await isNewMessage(messageId);
-    if (!isNew) return;
-
-    // Store message in Redis for getMessage callback
     if (msg.message) {
-      const redis = getRedis();
-      const encoded = Buffer.from(
-        proto.Message.encode(msg.message).finish(),
-      ).toString("base64");
-      await redis.set(`msg:${messageId}`, encoded, "EX", 3600);
+      const encoded = Buffer.from(proto.Message.encode(msg.message).finish()).toString('base64');
+      await getRedis().set(`msg:${this.deviceId}:${messageId}`, encoded, 'EX', 3600);
     }
 
-    // Extract text from various message types
     const text =
       msg.message?.conversation ||
       msg.message?.extendedTextMessage?.text ||
@@ -312,136 +261,70 @@ class ConnectionManager {
       null;
 
     const inbound: InboundMessage = {
+      deviceId: this.deviceId,
       id: messageId,
       from: msg.key.participant || remoteJid,
       chatId: remoteJid,
       text,
       timestamp: msg.messageTimestamp as number,
-      isGroup: remoteJid.endsWith("@g.us"),
+      isGroup: remoteJid.endsWith('@g.us'),
       pushName: msg.pushName || null,
     };
 
-    // Enqueue for reliable webhook delivery
     await enqueueMessage(inbound);
   }
 
-  async sendMessage(
-    jid: string,
-    text: string,
-    quotedId?: string,
-  ): Promise<string> {
+  async sendMessage(jid: string, text: string, quotedId?: string): Promise<string> {
     if (!this.sock || this.status !== ServiceStatus.CONNECTED) {
-      throw new Error("WhatsApp is not connected");
+      throw new Error('WhatsApp is not connected');
     }
-
-    const quoted = quotedId
-      ? ({ key: { remoteJid: jid, id: quotedId } } as any)
-      : undefined;
-
+    const quoted = quotedId ? ({ key: { remoteJid: jid, id: quotedId } } as any) : undefined;
     const result = await this.sock.sendMessage(jid, { text }, { quoted });
-    return result?.key.id || "";
+    return result?.key.id || '';
   }
 
-  async getChats(): Promise<ChatMetadata[]> {
-    if (!this.sock || this.status !== ServiceStatus.CONNECTED) {
-      throw new Error("WhatsApp is not connected");
-    }
-
-    const redis = getRedis();
-    const cached = await redis.hgetall("wa:chats");
-
-    // If cache has entries, return from cache (no socket call)
-    if (Object.keys(cached).length > 0) {
-      return Object.values(cached).map((v) => JSON.parse(v) as ChatMetadata);
-    }
-
-    // Cache is empty — do a one-time group fetch to seed it
+  async getChats(query?: string): Promise<ChatMetadata[]> {
+    if (this.cache.hasCachedChats()) return this.cache.getChats(query);
+    if (!this.sock || this.status !== ServiceStatus.CONNECTED) throw new Error('WhatsApp is not connected');
     const groups = await this.sock.groupFetchAllParticipating();
-    const chats: ChatMetadata[] = [];
-    const pipeline = redis.pipeline();
-
     for (const [id, meta] of Object.entries(groups)) {
-      const entry: ChatMetadata = { id, name: meta.subject, isGroup: true, phone: null };
-      chats.push(entry);
-      pipeline.hset("wa:chats", id, JSON.stringify(entry));
+      this.cache.setChat({ id, name: meta.subject, isGroup: true, phone: null });
     }
-
-    await pipeline.exec();
-    logger.info({ count: chats.length }, "Chat cache seeded from group fetch");
-    return chats;
+    logger.info({ deviceId: this.deviceId, count: Object.keys(groups).length }, 'Chat cache seeded from group fetch');
+    return this.cache.getChats(query);
   }
 
   async subscribe(jid: string): Promise<void> {
-    const redis = getRedis();
-    await redis.sadd("wa:subscribed", jid);
-    logger.info({ jid }, "Subscribed to chat");
+    await this.cache.subscribe(jid);
+    logger.info({ deviceId: this.deviceId, jid }, 'Subscribed to chat');
   }
 
   async unsubscribe(jid: string): Promise<void> {
-    const redis = getRedis();
-    await redis.srem("wa:subscribed", jid);
-    logger.info({ jid }, "Unsubscribed from chat");
+    await this.cache.unsubscribe(jid);
+    logger.info({ deviceId: this.deviceId, jid }, 'Unsubscribed from chat');
   }
 
-  async getSubscribed(): Promise<string[]> {
-    const redis = getRedis();
-    return redis.smembers("wa:subscribed");
-  }
+  getSubscribed(): string[] { return this.cache.getSubscribed(); }
 
   async resetAuth(): Promise<void> {
-    logger.warn(
-      "Manual auth reset requested — clearing auth files and restarting",
-    );
-
-    // Cancel any pending restart to avoid double-starts
-    if (this.restartTimer) {
-      clearTimeout(this.restartTimer);
-      this.restartTimer = null;
-    }
-
-    // Remove listeners BEFORE ending socket to prevent handleConnectionUpdate
-    // from scheduling a competing restart
+    logger.warn({ deviceId: this.deviceId }, 'Auth reset requested');
+    if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
     this.cleanupSocket();
-
-    // Clear auth files
-    const config = loadConfig();
     try {
-      const files = await fs.readdir(config.AUTH_DIR);
-      await Promise.all(
-        files.map((f) =>
-          fs.rm(path.join(config.AUTH_DIR, f), {
-            recursive: true,
-            force: true,
-          }),
-        ),
-      );
-      logger.info({ count: files.length }, "Auth files cleared");
-    } catch {
-      /* dir may be empty */
-    }
-
-    // Clear cached QR from Redis
-    await getRedis()
-      .del("wa:qr")
-      .catch(() => {});
+      const files = await fs.readdir(this.authDir);
+      await Promise.all(files.map((f) => fs.rm(path.join(this.authDir, f), { recursive: true, force: true })));
+      logger.info({ deviceId: this.deviceId, count: files?.length }, 'Auth files cleared');
+    } catch { /* dir may be empty */ }
     this.qrCode = null;
     this.reconnectAttempts = 0;
     this.status = ServiceStatus.INITIALIZING;
-
-    // Start fresh — will produce a new QR
     this.scheduleRestart(1000);
   }
 
   async close(): Promise<void> {
-    if (this.restartTimer) {
-      clearTimeout(this.restartTimer);
-      this.restartTimer = null;
-    }
+    if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
     this.cleanupSocket();
     this.status = ServiceStatus.DISCONNECTED;
-    logger.info("WhatsApp socket closed gracefully");
+    logger.info({ deviceId: this.deviceId }, 'Connection closed gracefully');
   }
 }
-
-// Singleton
-export const connectionManager = new ConnectionManager();

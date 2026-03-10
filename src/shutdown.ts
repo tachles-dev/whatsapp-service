@@ -1,8 +1,8 @@
 // shutdown.ts
 import { FastifyInstance } from 'fastify';
-import { connectionManager } from './connection';
 import { closeRedis } from './redis';
 import { stopHeartbeat } from './heartbeat';
+import { deviceManager } from './device-manager';
 import { logger } from './logger';
 
 export function setupGracefulShutdown(app: FastifyInstance): void {
@@ -11,8 +11,8 @@ export function setupGracefulShutdown(app: FastifyInstance): void {
 
     stopHeartbeat();
 
-    // Close WhatsApp socket first to prevent session corruption
-    await connectionManager.close();
+    // Flush caches and close all device connections
+    await deviceManager.shutdownAll();
 
     // Close HTTP server
     await app.close();
