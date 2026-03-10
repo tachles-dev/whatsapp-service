@@ -26,6 +26,31 @@ class ConnectionManager {
   private startTime = Date.now();
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 10;
+  private restartTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private scheduleRestart(delayMs: number): void {
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      this.start();
+    }, delayMs);
+  }
+
+  private cleanupSocket(): void {
+    if (this.sock) {
+      try {
+        this.sock.ev.removeAllListeners('connection.update');
+        this.sock.ev.removeAllListeners('creds.update');
+        this.sock.ev.removeAllListeners('messages.upsert');
+        this.sock.ev.removeAllListeners('contacts.upsert');
+        this.sock.ev.removeAllListeners('messaging-history.set');
+        this.sock.ev.removeAllListeners('groups.upsert');
+        this.sock.ev.removeAllListeners('groups.update');
+        this.sock.end(undefined);
+      } catch { /* ignore */ }
+      this.sock = null;
+    }
+  }
 
   getStatus(): ServiceStatus {
     return this.status;
@@ -51,21 +76,7 @@ class ConnectionManager {
 
   async start(): Promise<void> {
     // Close any existing socket before creating a new one
-    if (this.sock) {
-      try {
-        this.sock.ev.removeAllListeners('connection.update');
-        this.sock.ev.removeAllListeners('creds.update');
-        this.sock.ev.removeAllListeners('messages.upsert');
-        this.sock.ev.removeAllListeners('contacts.upsert');
-        this.sock.ev.removeAllListeners('messaging-history.set');
-        this.sock.ev.removeAllListeners('groups.upsert');
-        this.sock.ev.removeAllListeners('groups.update');
-        this.sock.end(undefined);
-      } catch {
-        // ignore cleanup errors
-      }
-      this.sock = null;
-    }
+    this.cleanupSocket();
 
     const config = loadConfig();
     const { state, saveCreds } = await useMultiFileAuthState(config.AUTH_DIR);
@@ -196,6 +207,12 @@ class ConnectionManager {
         logger.warn('Session logged out — clearing auth and restarting for new QR');
         this.status = ServiceStatus.DISCONNECTED;
 
+        // Cancel any pending restart
+        if (this.restartTimer) {
+          clearTimeout(this.restartTimer);
+          this.restartTimer = null;
+        }
+
         // Clear stale auth files so a fresh QR is generated
         const config = loadConfig();
         try {
@@ -210,7 +227,7 @@ class ConnectionManager {
 
         // Restart to generate a new QR code
         this.reconnectAttempts = 0;
-        setTimeout(() => this.start(), 3000);
+        this.scheduleRestart(3000);
         return;
       }
 
@@ -222,16 +239,12 @@ class ConnectionManager {
           { attempt: this.reconnectAttempts, maxAttempts: this.maxReconnectAttempts, delayMs: delay },
           'Reconnecting...',
         );
-        setTimeout(() => this.start(), delay);
+        this.scheduleRestart(delay);
       } else {
         logger.error('Max reconnect attempts reached — entering ERROR state, will retry in 5 minutes');
         this.status = ServiceStatus.ERROR;
         // Schedule a full recovery attempt after 5 minutes
-        setTimeout(() => {
-          logger.warn('Attempting error recovery after cooldown');
-          this.reconnectAttempts = 0;
-          this.start();
-        }, 5 * 60 * 1000);
+        this.scheduleRestart(5 * 60 * 1000);
       }
     }
 
@@ -339,11 +352,15 @@ class ConnectionManager {
   async resetAuth(): Promise<void> {
     logger.warn('Manual auth reset requested — clearing auth files and restarting');
 
-    // Close existing socket cleanly
-    if (this.sock) {
-      try { this.sock.end(undefined); } catch { /* ignore */ }
-      this.sock = null;
+    // Cancel any pending restart to avoid double-starts
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
     }
+
+    // Remove listeners BEFORE ending socket to prevent handleConnectionUpdate
+    // from scheduling a competing restart
+    this.cleanupSocket();
 
     // Clear auth files
     const config = loadConfig();
@@ -352,6 +369,7 @@ class ConnectionManager {
       await Promise.all(
         files.map((f) => fs.rm(path.join(config.AUTH_DIR, f), { recursive: true, force: true })),
       );
+      logger.info({ count: files.length }, 'Auth files cleared');
     } catch { /* dir may be empty */ }
 
     // Clear cached QR from Redis
@@ -361,16 +379,17 @@ class ConnectionManager {
     this.status = ServiceStatus.INITIALIZING;
 
     // Start fresh — will produce a new QR
-    setTimeout(() => this.start(), 1000);
+    this.scheduleRestart(1000);
   }
 
   async close(): Promise<void> {
-    if (this.sock) {
-      this.sock.end(undefined);
-      this.sock = null;
-      this.status = ServiceStatus.DISCONNECTED;
-      logger.info('WhatsApp socket closed gracefully');
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
     }
+    this.cleanupSocket();
+    this.status = ServiceStatus.DISCONNECTED;
+    logger.info('WhatsApp socket closed gracefully');
   }
 }
 
