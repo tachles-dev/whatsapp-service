@@ -176,7 +176,7 @@ class ConnectionManager {
       // Store QR in Redis with 120s TTL (survives one refresh cycle)
       const redis = getRedis();
       redis.set('wa:qr', qr, 'EX', 120).catch(() => {});
-      logger.info({ qrLength: qr.length }, 'QR code ready for scanning');
+      logger.info({ qrLength: qr.length }, 'QR code ready — waiting for scan');
     }
 
     if (connection === 'close') {
@@ -219,13 +219,19 @@ class ConnectionManager {
         const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 60_000);
         this.reconnectAttempts++;
         logger.info(
-          { attempt: this.reconnectAttempts, delayMs: delay },
+          { attempt: this.reconnectAttempts, maxAttempts: this.maxReconnectAttempts, delayMs: delay },
           'Reconnecting...',
         );
         setTimeout(() => this.start(), delay);
       } else {
-        logger.error('Max reconnect attempts reached');
+        logger.error('Max reconnect attempts reached — entering ERROR state, will retry in 5 minutes');
         this.status = ServiceStatus.ERROR;
+        // Schedule a full recovery attempt after 5 minutes
+        setTimeout(() => {
+          logger.warn('Attempting error recovery after cooldown');
+          this.reconnectAttempts = 0;
+          this.start();
+        }, 5 * 60 * 1000);
       }
     }
 

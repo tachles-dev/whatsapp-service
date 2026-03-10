@@ -15,6 +15,18 @@ export function startHeartbeat(): void {
   heartbeatTimer = setInterval(async () => {
     try {
       const statusData = connectionManager.getStatusData();
+
+      // Log status every heartbeat so Render logs show live state
+      logger.info(
+        {
+          status: statusData.status,
+          uptime: Math.round(statusData.uptime / 1000) + 's',
+          connectedAt: statusData.connectedAt,
+          hasQr: statusData.qr !== null,
+        },
+        'Heartbeat',
+      );
+
       const res = await fetch(config.WEBHOOK_URL, {
         method: 'POST',
         headers: {
