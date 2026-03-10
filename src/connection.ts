@@ -270,6 +270,7 @@ class ConnectionManager {
   }
 
   private async handleInboundMessage(msg: proto.IWebMessageInfo): Promise<void> {
+    if (!msg.key) return;
     // Skip own messages
     if (msg.key.fromMe) return;
 
@@ -324,7 +325,7 @@ class ConnectionManager {
     }
 
     const quoted = quotedId
-      ? { key: { remoteJid: jid, id: quotedId } } as proto.IWebMessageInfo
+      ? { key: { remoteJid: jid, id: quotedId } } as any
       : undefined;
 
     const result = await this.sock.sendMessage(jid, { text }, { quoted });
