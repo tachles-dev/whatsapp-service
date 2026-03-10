@@ -8,7 +8,8 @@ import { ServiceStatus, ApiResponse } from './types';
 import { logger } from './logger';
 
 // JID validation: must end with @s.whatsapp.net or @g.us
-const jidPattern = /^[\d]+@(s\.whatsapp\.net|g\.us)$/;
+// Supports modern group JIDs (digits@g.us) and legacy format (digits-digits@g.us)
+const jidPattern = /^(\d+-\d+|\d+)@(s\.whatsapp\.net|g\.us)$/;
 // Phone number: digits only, 7-15 chars (E.164 without +)
 const phonePattern = /^\d{7,15}$/;
 
@@ -20,7 +21,7 @@ const sendMessageSchema = z
   .object({
     jid: z
       .string()
-      .regex(jidPattern, 'Invalid JID format. Use number@s.whatsapp.net or number@g.us')
+      .regex(jidPattern, 'Invalid JID format. Use number@s.whatsapp.net, number@g.us, or number-number@g.us')
       .optional(),
     phone: z
       .string()
