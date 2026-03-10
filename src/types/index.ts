@@ -45,6 +45,7 @@ export interface StatusData {
   uptime: number;
   connectedAt: number | null;
   lastDisconnect: number | null;
+  qr: string | null;
 }
 
 export interface QrData {

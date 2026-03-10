@@ -41,6 +41,7 @@ class ConnectionManager {
       uptime: Date.now() - this.startTime,
       connectedAt: this.connectedAt,
       lastDisconnect: this.lastDisconnect,
+      qr: this.status === ServiceStatus.CONNECTED ? null : this.qrCode,
     };
   }
 
@@ -327,6 +328,34 @@ class ConnectionManager {
     await pipeline.exec();
     logger.info({ count: chats.length }, 'Chat cache seeded from group fetch');
     return chats;
+  }
+
+  async resetAuth(): Promise<void> {
+    logger.warn('Manual auth reset requested — clearing auth files and restarting');
+
+    // Close existing socket cleanly
+    if (this.sock) {
+      try { this.sock.end(undefined); } catch { /* ignore */ }
+      this.sock = null;
+    }
+
+    // Clear auth files
+    const config = loadConfig();
+    try {
+      const files = await fs.readdir(config.AUTH_DIR);
+      await Promise.all(
+        files.map((f) => fs.rm(path.join(config.AUTH_DIR, f), { recursive: true, force: true })),
+      );
+    } catch { /* dir may be empty */ }
+
+    // Clear cached QR from Redis
+    await getRedis().del('wa:qr').catch(() => {});
+    this.qrCode = null;
+    this.reconnectAttempts = 0;
+    this.status = ServiceStatus.INITIALIZING;
+
+    // Start fresh — will produce a new QR
+    setTimeout(() => this.start(), 1000);
   }
 
   async close(): Promise<void> {

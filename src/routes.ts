@@ -40,7 +40,24 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   // GET /api/status — public health check
   app.get('/api/status', async () => {
-    return ok(connectionManager.getStatusData());
+    const data = connectionManager.getStatusData();
+    // Augment with Redis QR fallback when memory QR is null
+    if (data.qr === null && data.status !== ServiceStatus.CONNECTED) {
+      const redis = getRedis();
+      data.qr = await redis.get('wa:qr');
+    }
+    return ok(data);
+  });
+
+  // POST /api/auth/reset — clear auth files and force a fresh QR
+  app.post('/api/auth/reset', async (_req, reply) => {
+    try {
+      await connectionManager.resetAuth();
+      return ok({ message: 'Auth cleared. New QR will be generated shortly.' });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return reply.code(500).send(fail('RESET_FAILED', msg));
+    }
   });
 
   // GET /api/auth/qr — returns QR code for initial pairing

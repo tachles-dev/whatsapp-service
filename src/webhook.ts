@@ -14,7 +14,7 @@ export async function deliverWebhook(message: InboundMessage): Promise<void> {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-API-KEY': config.WEBHOOK_API_KEY,
+      'x-api-key': config.WEBHOOK_API_KEY,
     },
     body: JSON.stringify(message),
     signal: AbortSignal.timeout(10_000),
