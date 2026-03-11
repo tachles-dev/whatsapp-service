@@ -4,8 +4,11 @@
 #   bash scripts/setup.sh
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+KEY="$HOME/.ssh/hetzner"
+
 SERVER="root@178.104.32.156"
-SSH="ssh -i ssh-hetzner $SERVER"
+SSH="ssh -i $KEY -o StrictHostKeyChecking=accept-new $SERVER"
 DEPLOY_DIR="/opt/whatsapp-service"
 
 echo "==> [1/5] Installing system packages..."
@@ -33,7 +36,7 @@ $SSH "mkdir -p $DEPLOY_DIR"
 
 echo "==> [5/5] Syncing project files..."
 rsync -az --exclude=node_modules --exclude=dist --exclude=.git --exclude=.env \
-  -e "ssh -i ssh-hetzner" \
+  -e "ssh -i $KEY -o StrictHostKeyChecking=accept-new" \
   . "$SERVER:$DEPLOY_DIR/"
 
 echo ""
