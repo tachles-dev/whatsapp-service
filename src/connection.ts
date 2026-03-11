@@ -156,6 +156,10 @@ export class ConnectionManager {
     this.sock.ev.on('contacts.upsert', (contacts) => {
       for (const contact of contacts) {
         if (!contact.id || contact.id === 'status@broadcast') continue;
+        // Map LID → phone JID so we can resolve participant @lid JIDs later
+        if (contact.lid && contact.id.endsWith('@s.whatsapp.net')) {
+          this.cache.setLid(contact.lid as string, contact.id);
+        }
         this.cache.setChat({
           id: contact.id,
           name: contact.notify || contact.verifiedName || contact.name || contact.id.split('@')[0],
@@ -169,6 +173,9 @@ export class ConnectionManager {
       if (!contacts?.length) return;
       for (const contact of contacts) {
         if (!contact.id || contact.id === 'status@broadcast') continue;
+        if (contact.lid && contact.id.endsWith('@s.whatsapp.net')) {
+          this.cache.setLid(contact.lid as string, contact.id);
+        }
         this.cache.setChat({
           id: contact.id,
           name: contact.notify || contact.verifiedName || contact.name || contact.id.split('@')[0],
@@ -189,12 +196,12 @@ export class ConnectionManager {
     this.sock.ev.on('messages.reaction', async (reactions: any[]) => {
       for (const { key, reaction } of reactions) {
         if (!key?.id) continue;
+        const rawFrom = reaction?.key?.participant || reaction?.key?.remoteJid || key.remoteJid || '';
         const event: ReactionEvent = {
           type: 'reaction',
           deviceId: this.deviceId,
           messageId: key.id,
-          // reactor JID lives on the reaction's own key, not the original message key
-          from: reaction?.key?.participant || reaction?.key?.remoteJid || key.remoteJid || '',
+          from: this.cache.resolveLid(rawFrom),
           chatId: key.remoteJid || '',
           isGroup: (key.remoteJid || '').endsWith('@g.us'),
           pushName: null,
@@ -224,7 +231,7 @@ export class ConnectionManager {
           chatId: key.remoteJid || '',
           isGroup: (key.remoteJid || '').endsWith('@g.us'),
           receipts: receipts.map((r: any) => ({
-            participantJid: r.userJid || '',
+            participantJid: this.cache.resolveLid(r.userJid || ''),
             type: r.readTimestamp ? 'READ' : r.playedTimestamp ? 'PLAYED' : r.receiptTimestamp ? 'DELIVERY' : 'SERVER_ACK',
             readTimestamp: r.readTimestamp ? Number(r.readTimestamp) : undefined,
             receiptTimestamp: r.receiptTimestamp ? Number(r.receiptTimestamp) : undefined,

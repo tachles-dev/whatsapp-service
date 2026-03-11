@@ -13,6 +13,8 @@ export class DeviceCache {
   // Track only the IDs of chats that changed — avoids rewriting all chats on every flush
   private dirtyChatIds = new Set<string>();
   private chatFlushTimer: ReturnType<typeof setInterval> | null = null;
+  // LID → phone JID mapping (e.g. '123@lid' → '972501234567@s.whatsapp.net')
+  private lidMap = new Map<string, string>();
 
   constructor(private readonly deviceId: string) {}
 
@@ -61,6 +63,25 @@ export class DeviceCache {
   }
 
   // ── Subscriptions ────────────────────────────────────────────────────────
+
+  // ── LID resolution ─────────────────────────────────────────────────────
+
+  /**
+   * Store a LID → phone JID mapping. Safe to call repeatedly; a no-op if lid is falsy.
+   */
+  setLid(lid: string, phoneJid: string): void {
+    if (lid) this.lidMap.set(lid, phoneJid);
+  }
+
+  /**
+   * Resolve a JID that may be a LID to a phone JID.
+   * If jid ends with @lid and we have a mapping, returns the phone JID.
+   * Otherwise returns the original jid unchanged.
+   */
+  resolveLid(jid: string): string {
+    if (!jid.endsWith('@lid')) return jid;
+    return this.lidMap.get(jid) ?? jid;
+  }
 
   isSubscribed(jid: string): boolean {
     return this.subscriptions.has(jid);
