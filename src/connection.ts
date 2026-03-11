@@ -183,7 +183,8 @@ export class ConnectionManager {
       for (const msg of messages) await this.handleInboundMessage(msg);
     });
 
-    // Track reactions on messages WE sent (key.fromMe === true)
+    // Track reactions on messages WE sent (key.fromMe === true).
+    // key = the original message's key; reaction.key = the reaction message's key (has the reactor's JID)
     this.sock.ev.on('messages.reaction', async (reactions: any[]) => {
       for (const { key, reaction } of reactions) {
         if (!key?.id || !key.fromMe) continue;
@@ -191,7 +192,8 @@ export class ConnectionManager {
           type: 'reaction',
           deviceId: this.deviceId,
           messageId: key.id,
-          from: key.participant || key.remoteJid || '',
+          // reactor JID lives on the reaction's own key, not the original message key
+          from: reaction?.key?.participant || reaction?.key?.remoteJid || key.remoteJid || '',
           chatId: key.remoteJid || '',
           isGroup: (key.remoteJid || '').endsWith('@g.us'),
           pushName: null,
@@ -202,28 +204,29 @@ export class ConnectionManager {
       }
     });
 
-    // Track delivery/read receipts for messages WE sent (key.fromMe === true)
+    // Track delivery/read receipts for messages WE sent (key.fromMe === true).
+    // MessageUserReceiptUpdate = { key: WAMessageKey, receipt: MessageUserReceipt }
     this.sock.ev.on('message-receipt.update', async (updates: any[]) => {
-      // Group receipts by message key to batch them
-      const byKey = new Map<string, { key: any; updates: any[] }>();
-      for (const { key, update } of updates) {
+      // Group receipts by message key to batch them into one event per message
+      const byKey = new Map<string, { key: any; receipts: any[] }>();
+      for (const { key, receipt } of updates) {
         if (!key?.id || !key.fromMe) continue;
         const existing = byKey.get(key.id);
-        if (existing) existing.updates.push(update);
-        else byKey.set(key.id, { key, updates: [update] });
+        if (existing) existing.receipts.push(receipt);
+        else byKey.set(key.id, { key, receipts: [receipt] });
       }
-      for (const { key, updates: receipts } of byKey.values()) {
+      for (const { key, receipts } of byKey.values()) {
         const event: ReceiptEvent = {
           type: 'receipt',
           deviceId: this.deviceId,
           messageId: key.id,
           chatId: key.remoteJid || '',
           isGroup: (key.remoteJid || '').endsWith('@g.us'),
-          receipts: receipts.map((u: any) => ({
-            participantJid: u.userJid || '',
-            type: u.readTimestamp ? 'READ' : u.receiptTimestamp ? 'DELIVERY' : 'SERVER_ACK',
-            readTimestamp: u.readTimestamp,
-            receiptTimestamp: u.receiptTimestamp,
+          receipts: receipts.map((r: any) => ({
+            participantJid: r.userJid || '',
+            type: r.readTimestamp ? 'READ' : r.playedTimestamp ? 'PLAYED' : r.receiptTimestamp ? 'DELIVERY' : 'SERVER_ACK',
+            readTimestamp: r.readTimestamp ? Number(r.readTimestamp) : undefined,
+            receiptTimestamp: r.receiptTimestamp ? Number(r.receiptTimestamp) : undefined,
           })),
           timestamp: Math.floor(Date.now() / 1000),
         };
