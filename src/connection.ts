@@ -396,15 +396,15 @@ export class ConnectionManager {
     });
   }
 
-  async getChats(query?: string): Promise<ChatMetadata[]> {
-    if (this.cache.hasCachedChats()) return this.cache.getChats(query);
+  async getChats(query?: string, kind?: 'CONTACT' | 'GROUP', hideUnnamed?: boolean): Promise<ChatMetadata[]> {
+    if (this.cache.hasCachedChats()) return this.cache.getChats(query, kind, hideUnnamed);
     if (!this.sock || this.status !== ServiceStatus.CONNECTED) throw new Error('WhatsApp is not connected');
     const groups = await this.sock.groupFetchAllParticipating();
     for (const [id, meta] of Object.entries(groups)) {
       this.cache.setChat({ id, name: meta.subject, isGroup: true, phone: null });
     }
     logger.info({ deviceId: this.deviceId, count: Object.keys(groups).length }, 'Chat cache seeded from group fetch');
-    return this.cache.getChats(query);
+    return this.cache.getChats(query, kind, hideUnnamed);
   }
 
   /**

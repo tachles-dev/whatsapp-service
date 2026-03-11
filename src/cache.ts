@@ -112,8 +112,17 @@ export class DeviceCache {
     return this.chats.get(jid);
   }
 
-  getChats(query?: string): ChatMetadata[] {
-    const all = [...this.chats.values()];
+  getChats(query?: string, kind?: 'CONTACT' | 'GROUP', hideUnnamed?: boolean): ChatMetadata[] {
+    let all = [...this.chats.values()];
+    if (kind === 'CONTACT') all = all.filter((c) => !c.isGroup);
+    else if (kind === 'GROUP') all = all.filter((c) => c.isGroup);
+    if (hideUnnamed) {
+      all = all.filter((c) => {
+        // Keep only entries whose name is not just the raw phone/JID prefix
+        const rawId = c.id.split('@')[0];
+        return c.name !== rawId && c.name !== c.phone;
+      });
+    }
     if (!query) return all;
     const q = query.toLowerCase();
     return all.filter(

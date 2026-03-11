@@ -237,8 +237,12 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       const { clientId, deviceId } = request.params as DeviceParams;
       try {
         const manager = deviceManager.assertManager(clientId, deviceId);
-        const q = ((request.query as Record<string, string>).q ?? '').trim() || undefined;
-        const chats = await manager.getChats(q);
+        const qs = request.query as Record<string, string>;
+        const q = (qs.q ?? '').trim() || undefined;
+        const rawKind = (qs.kind ?? '').toUpperCase();
+        const kind = rawKind === 'CONTACT' || rawKind === 'GROUP' ? (rawKind as 'CONTACT' | 'GROUP') : undefined;
+        const hideUnnamed = qs.hideUnnamed === '1' || qs.hideUnnamed === 'true';
+        const chats = await manager.getChats(q, kind, hideUnnamed || undefined);
         return ok(chats);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : 'Unknown error';
