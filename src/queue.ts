@@ -66,9 +66,9 @@ export async function enqueueWebhookEvent(event: WebhookEvent): Promise<void> {
   // Reactions and receipts get unique IDs so every event is tracked.
   let jobId: string | undefined;
   if (event.type === 'message') {
-    jobId = `msg:${event.id}`;
+    jobId = `msg_${event.id}`;
   } else if (event.type === 'reaction') {
-    jobId = `reaction:${event.messageId}:${event.from}:${event.timestamp}`;
+    jobId = `reaction_${event.messageId}_${event.from}_${event.timestamp}`;
   }
   await queue.add('webhook-event', event, jobId ? { jobId } : {});
 }
