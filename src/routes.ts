@@ -201,6 +201,33 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // ── Contacts ────────────────────────────────────────────────────────────────
+
+  // GET /api/clients/:clientId/devices/:deviceId/contacts/check?phone=
+  // Asks WhatsApp's servers whether a phone number is registered.
+  // Also caches the result so the contact appears in subsequent /chats searches.
+  app.get(
+    '/api/clients/:clientId/devices/:deviceId/contacts/check',
+    async (request: FastifyRequest, reply) => {
+      const { clientId, deviceId } = request.params as DeviceParams;
+      const phone = ((request.query as Record<string, string>).phone ?? '').trim();
+      if (!phonePattern.test(phone)) {
+        return reply
+          .code(400)
+          .send(fail('VALIDATION_ERROR', 'Phone must be digits only (E.164 without +), e.g. 972501234567'));
+      }
+      try {
+        const manager = deviceManager.assertManager(clientId, deviceId);
+        const result = await manager.checkPhone(phone);
+        return ok(result);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        logger.error({ err, deviceId, phone }, 'Failed to check phone');
+        return reply.code(503).send(fail('CHECK_PHONE_FAILED', message));
+      }
+    },
+  );
+
   // ── Chats ──────────────────────────────────────────────────────────────────
 
   // GET /api/clients/:clientId/devices/:deviceId/chats?q=

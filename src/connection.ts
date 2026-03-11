@@ -407,6 +407,21 @@ export class ConnectionManager {
     return this.cache.getChats(query);
   }
 
+  /**
+   * Ask WhatsApp's servers whether a phone number is registered.
+   * Caches the result so the contact becomes discoverable via getChats.
+   */
+  async checkPhone(phone: string): Promise<{ exists: boolean; jid: string | null }> {
+    if (!this.sock || this.status !== ServiceStatus.CONNECTED) throw new Error('WhatsApp is not connected');
+    const results = await this.sock.onWhatsApp(phone);
+    if (!results?.length || !results[0].exists) return { exists: false, jid: null };
+    const { jid } = results[0];
+    // Cache it so the contact surfaces in future getChats/search calls
+    this.cache.setChat({ id: jid, name: phone, isGroup: false, phone });
+    logger.info({ deviceId: this.deviceId, phone, jid }, 'Phone lookup succeeded — contact cached');
+    return { exists: true, jid };
+  }
+
   async subscribe(jid: string): Promise<void> {
     await this.cache.subscribe(jid);
     logger.info({ deviceId: this.deviceId, jid }, 'Subscribed to chat');
