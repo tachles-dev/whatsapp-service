@@ -251,7 +251,7 @@ export class ConnectionManager {
         chatId: id,
         action,
         participants: participants.map((p) => {
-          const resolvedJid = this.cache.resolveLid(p);
+          const resolvedJid = this.cache.resolveLid(p.id);
           return {
             jid: resolvedJid,
             phone: resolvedJid.endsWith('@s.whatsapp.net') ? resolvedJid.split('@')[0] : null,
