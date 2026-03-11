@@ -33,7 +33,7 @@ export function startWebhookWorker(): Worker {
   const worker = new Worker<WebhookEvent>(
     QUEUE_NAME,
     async (job: Job<WebhookEvent>) => {
-      const eventId = job.data.type === 'message' ? job.data.id : job.data.messageId;
+      const eventId = job.data.type === 'message' ? job.data.id : job.data.type === 'group_participants_update' ? job.data.chatId : job.data.messageId;
       logger.info({ eventId, type: job.data.type, attempt: job.attemptsMade + 1 }, 'Delivering webhook');
       await deliverWebhook(job.data);
     },
@@ -48,12 +48,12 @@ export function startWebhookWorker(): Worker {
   );
 
   worker.on('completed', (job) => {
-    const eventId = job.data.type === 'message' ? job.data.id : job.data.messageId;
+    const eventId = job.data.type === 'message' ? job.data.id : job.data.type === 'group_participants_update' ? job.data.chatId : job.data.messageId;
     logger.info({ eventId, type: job.data.type }, 'Webhook delivered');
   });
 
   worker.on('failed', (job, err) => {
-    const eventId = job?.data.type === 'message' ? job.data.id : job?.data.messageId;
+    const eventId = job?.data.type === 'message' ? job.data.id : job?.data.type === 'group_participants_update' ? job?.data.chatId : job?.data.messageId;
     logger.error({ eventId, type: job?.data.type, err: err.message }, 'Webhook delivery failed');
   });
 
