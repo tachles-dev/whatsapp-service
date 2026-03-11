@@ -1,7 +1,7 @@
 // heartbeat.ts
 import { loadConfig } from './config';
 import { logger } from './logger';
-import { deviceManager } from './device-manager';
+import { deviceManager } from './core/device-manager';
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 

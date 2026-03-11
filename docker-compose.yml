@@ -1,36 +1,87 @@
 services:
+
+  # ── Redis ────────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # Password auth + append-only persistence + hourly snapshot
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --appendonly yes
+      --appendfsync everysec
+      --save 3600 1
     volumes:
       - redis_data:/data
+    networks:
+      - backend
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
 
+  # ── WhatsApp gateway app ─────────────────────────────────────────────────────
+  app:
+    build: .
+    restart: unless-stopped
+    # No external port binding — only reachable through Caddy on the internal network
+    env_file: .env
+    volumes:
+      - auth_data:/data/auth
+    networks:
+      - backend
+      - frontend
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ── Caddy: TLS termination + reverse proxy ───────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - frontend
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      DOMAIN: ${DOMAIN}
+
+  # ── Redis Insight: admin UI (localhost only) ─────────────────────────────────
   redisinsight:
     image: redis/redisinsight:latest
     restart: unless-stopped
     ports:
       - "127.0.0.1:5540:5540"
+    networks:
+      - backend
     depends_on:
       redis:
         condition: service_healthy
 
-  app:
-    build: .
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    env_file: .env
-    volumes:
-      - auth_data:/data/auth
-    depends_on:
-      redis:
-        condition: service_healthy
+networks:
+  # Public-facing: Caddy ↔ App
+  frontend:
+  # Internal only: App ↔ Redis ↔ RedisInsight
+  backend:
 
 volumes:
   redis_data:
   auth_data:
+  caddy_data:    # Let's Encrypt certificates — survives container restarts
+  caddy_config:

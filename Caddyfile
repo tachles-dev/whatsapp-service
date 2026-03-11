@@ -1,0 +1,49 @@
+# Caddyfile — production TLS termination for the WhatsApp Gateway Service.
+#
+# Caddy automatically provisions and renews a Let's Encrypt certificate for
+# the domain set in the DOMAIN env var (passed from docker-compose.yml).
+#
+# Local dev without a public domain:
+#   Replace `{$DOMAIN}` with `localhost` — Caddy will issue a self-signed cert.
+
+{$DOMAIN} {
+
+  # ── Reverse proxy to the app ──────────────────────────────────────────────
+  reverse_proxy app:3000
+
+  # ── Security headers ──────────────────────────────────────────────────────
+  header {
+    # Never expose Caddy or Node version information
+    -Server
+    -X-Powered-By
+
+    # HSTS — browser won't attempt plain HTTP after first visit
+    Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+
+    # Iframe embedding — deny unless same origin
+    X-Frame-Options DENY
+
+    # Prevent MIME sniffing
+    X-Content-Type-Options nosniff
+
+    # Control referrer header for cross-origin requests
+    Referrer-Policy strict-origin-when-cross-origin
+
+    # Basic permissions policy — disable features the service never uses
+    Permissions-Policy "camera=(), microphone=(), geolocation=()"
+  }
+
+  # ── Request body limit ────────────────────────────────────────────────────
+  # Protects against payload-based DoS. Adjust upward only if you send large
+  # base64-encoded media in request bodies.
+  request_body {
+    max_size 25MB
+  }
+
+  # ── Structured access log ─────────────────────────────────────────────────
+  log {
+    output stdout
+    format json
+    level INFO
+  }
+}

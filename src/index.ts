@@ -4,11 +4,11 @@ import cors from '@fastify/cors';
 import { loadConfig } from './config';
 import { logger, loggerConfig } from './logger';
 import { getRedis } from './redis';
-import { registerRoutes } from './routes';
-import { startWebhookWorker } from './queue';
+import { registerRoutes } from './routes/index';
+import { startWebhookWorker } from './queue/index';
 import { startHeartbeat } from './heartbeat';
 import { setupGracefulShutdown } from './shutdown';
-import { deviceManager } from './device-manager';
+import { deviceManager } from './core/device-manager';
 
 async function main(): Promise<void> {
   // Load and validate env vars early

@@ -1,8 +1,8 @@
-// cache.ts — Per-device in-memory cache for chats, subscriptions, and message deduplication.
+// core/cache.ts — Per-device in-memory cache for chats, subscriptions, and message deduplication.
 // Redis is only touched on startup (bulk load) and on subscription changes (small writes).
-import { ChatMetadata } from './types';
-import { getRedis } from './redis';
-import { logger } from './logger';
+import { ChatMetadata } from '../types';
+import { getRedis } from '../redis';
+import { logger } from '../logger';
 
 export class DeviceCache {
   private chats = new Map<string, ChatMetadata>();
@@ -61,8 +61,6 @@ export class DeviceCache {
       if (expiry < now) this.dedupMap.delete(id);
     }
   }
-
-  // ── Subscriptions ────────────────────────────────────────────────────────
 
   // ── LID resolution ─────────────────────────────────────────────────────
 

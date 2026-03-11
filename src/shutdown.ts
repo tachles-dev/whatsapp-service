@@ -2,7 +2,7 @@
 import { FastifyInstance } from 'fastify';
 import { closeRedis } from './redis';
 import { stopHeartbeat } from './heartbeat';
-import { deviceManager } from './device-manager';
+import { deviceManager } from './core/device-manager';
 import { logger } from './logger';
 
 export function setupGracefulShutdown(app: FastifyInstance): void {

@@ -1,21 +1,23 @@
-// device-manager.ts — Manages all per-client WhatsApp device instances.
+// core/device-manager.ts — Manages all per-client WhatsApp device instances.
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { ConnectionManager } from './connection';
+import { BaileysAdapter } from '../adapters/baileys';
 import { DeviceCache } from './cache';
-import { DeviceInfo } from './types';
-import { getRedis } from './redis';
-import { loadConfig } from './config';
-import { logger } from './logger';
+import { DeviceInfo, IWhatsAppAdapter } from '../types';
+import { getRedis } from '../redis';
+import { loadConfig } from '../config';
+import { logger } from '../logger';
+import { clientConfigManager } from './client-config';
 
 const MAX_DEVICES_PER_CLIENT = 5;
+void MAX_DEVICES_PER_CLIENT; // used via clientConfig.maxDevices
 
 interface StoredDeviceInfo extends DeviceInfo {
   clientId: string;
 }
 
 class DeviceManager {
-  private managers = new Map<string, ConnectionManager>();
+  private managers = new Map<string, IWhatsAppAdapter>();
   private caches = new Map<string, DeviceCache>();
   private infos = new Map<string, StoredDeviceInfo>();
 
@@ -40,7 +42,7 @@ class DeviceManager {
   // ── Phone access control ───────────────────────────────────────────────────
 
   /**
-   * Called by ConnectionManager when a QR scan succeeds and a phone connects.
+   * Called by BaileysAdapter when a QR scan succeeds and a phone connects.
    * Returns true if the phone is permitted; false if the device should be
    * immediately disconnected (banned or outside allowlist).
    * Also persists the phone number to the device's stored info.
@@ -76,7 +78,7 @@ class DeviceManager {
     return true;
   }
 
-  private attachPhoneVerifier(manager: ConnectionManager, clientId: string, deviceId: string): void {
+  private attachPhoneVerifier(manager: IWhatsAppAdapter, clientId: string, deviceId: string): void {
     manager.setPhoneVerifier((phone) => this.handlePhoneConnected(clientId, deviceId, phone));
   }
 
@@ -99,7 +101,7 @@ class DeviceManager {
         const cache = new DeviceCache(info.id);
         await cache.loadFromRedis();
 
-        const manager = new ConnectionManager(info.id, info.clientId, authDir, cache);
+        const manager = new BaileysAdapter(info.id, info.clientId, authDir, cache);
         this.attachPhoneVerifier(manager, info.clientId, info.id);
 
         this.infos.set(info.id, info);
@@ -113,13 +115,18 @@ class DeviceManager {
     );
 
     logger.info({ count: this.managers.size }, 'Devices loaded from Redis');
+
+    // Preload per-client configs for all known clients
+    const uniqueClientIds = [...new Set([...this.infos.values()].map((i) => i.clientId))];
+    await Promise.all(uniqueClientIds.map((cid) => clientConfigManager.loadConfig(cid)));
   }
 
   /** Register a new device for a client. Returns the new device info. */
   async createDevice(clientId: string, name: string): Promise<StoredDeviceInfo> {
     const existing = this.getClientInfos(clientId);
-    if (existing.length >= MAX_DEVICES_PER_CLIENT) {
-      throw new Error(`Max ${MAX_DEVICES_PER_CLIENT} devices per client reached`);
+    const cfg = clientConfigManager.getConfig(clientId);
+    if (existing.length >= cfg.maxDevices) {
+      throw new Error(`Max ${cfg.maxDevices} devices per client reached`);
     }
 
     const config = loadConfig();
@@ -138,7 +145,10 @@ class DeviceManager {
     const cache = new DeviceCache(deviceId);
     await cache.loadFromRedis();
 
-    const manager = new ConnectionManager(deviceId, clientId, authDir, cache);
+    // Ensure this client's config is in memory (no-op if already loaded)
+    await clientConfigManager.loadConfig(clientId);
+
+    const manager = new BaileysAdapter(deviceId, clientId, authDir, cache);
     this.attachPhoneVerifier(manager, clientId, deviceId);
 
     this.infos.set(deviceId, info);
@@ -185,7 +195,7 @@ class DeviceManager {
 
   // ── Accessors ──────────────────────────────────────────────────────────────
 
-  getManager(deviceId: string): ConnectionManager | undefined {
+  getManager(deviceId: string): IWhatsAppAdapter | undefined {
     return this.managers.get(deviceId);
   }
 
@@ -201,8 +211,8 @@ class DeviceManager {
     return [...this.infos.values()];
   }
 
-  /** Throws if device doesn't belong to this client. Returns the manager. */
-  assertManager(clientId: string, deviceId: string): ConnectionManager {
+  /** Throws if device doesn't belong to this client. Returns the adapter. */
+  assertManager(clientId: string, deviceId: string): IWhatsAppAdapter {
     this.assertOwnership(clientId, deviceId);
     const manager = this.managers.get(deviceId);
     if (!manager) throw new Error('Device manager not found');
