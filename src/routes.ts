@@ -223,6 +223,26 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   // ── Subscriptions ──────────────────────────────────────────────────────────
 
+  // GET /api/clients/:clientId/devices/:deviceId/groups/:jid/members
+  app.get(
+    '/api/clients/:clientId/devices/:deviceId/groups/:jid/members',
+    async (request: FastifyRequest, reply) => {
+      const { clientId, deviceId, jid } = request.params as JidParams;
+      if (!jidPattern.test(jid)) {
+        return reply.code(400).send(fail('VALIDATION_ERROR', 'Invalid JID'));
+      }
+      try {
+        const manager = deviceManager.assertManager(clientId, deviceId);
+        const members = await manager.getGroupMembers(jid);
+        return ok(members);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        logger.error({ err, deviceId, jid }, 'Failed to fetch group members');
+        return reply.code(503).send(fail('GROUP_MEMBERS_FAILED', message));
+      }
+    },
+  );
+
   // GET /api/clients/:clientId/devices/:deviceId/groups/subscribed
   app.get(
     '/api/clients/:clientId/devices/:deviceId/groups/subscribed',

@@ -24,6 +24,15 @@ export interface SendMessageRequest {
   quotedId?: string;
 }
 
+export interface GroupMember {
+  /** Resolved phone JID (e.g. 972501234567@s.whatsapp.net), or @lid if unresolvable */
+  jid: string;
+  /** E.164-style phone number without +, or null if the JID is still a LID */
+  phone: string | null;
+  name: string | null;
+  role: 'admin' | 'superadmin' | 'member';
+}
+
 export interface ChatMetadata {
   id: string;
   name: string;

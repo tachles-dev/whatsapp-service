@@ -15,7 +15,7 @@ import { loadConfig } from './config';
 import { logger } from './logger';
 import { getRedis } from './redis';
 import { DeviceCache } from './cache';
-import { ServiceStatus, InboundMessage, ReactionEvent, ReceiptEvent, ChatMetadata } from './types';
+import { ServiceStatus, InboundMessage, ReactionEvent, ReceiptEvent, GroupMember, ChatMetadata } from './types';
 import { enqueueWebhookEvent } from './queue';
 
 export class ConnectionManager {
@@ -359,6 +359,21 @@ export class ConnectionManager {
     const quoted = quotedId ? ({ key: { remoteJid: jid, id: quotedId } } as any) : undefined;
     const result = await this.sock.sendMessage(jid, { text }, { quoted });
     return result?.key.id || '';
+  }
+
+  async getGroupMembers(jid: string): Promise<GroupMember[]> {
+    if (!this.sock || this.status !== ServiceStatus.CONNECTED) throw new Error('WhatsApp is not connected');
+    const meta = await this.sock.groupMetadata(jid);
+    return meta.participants.map((p) => {
+      const resolvedJid = this.cache.resolveLid(p.id);
+      const isPhone = resolvedJid.endsWith('@s.whatsapp.net');
+      return {
+        jid: resolvedJid,
+        phone: isPhone ? resolvedJid.split('@')[0] : null,
+        name: p.name ?? null,
+        role: (p.admin === 'superadmin' ? 'superadmin' : p.admin === 'admin' ? 'admin' : 'member') as GroupMember['role'],
+      };
+    });
   }
 
   async getChats(query?: string): Promise<ChatMetadata[]> {
