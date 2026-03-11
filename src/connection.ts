@@ -15,7 +15,7 @@ import { loadConfig } from './config';
 import { logger } from './logger';
 import { getRedis } from './redis';
 import { DeviceCache } from './cache';
-import { ServiceStatus, InboundMessage, ReactionEvent, ReceiptEvent, GroupMember, ChatMetadata } from './types';
+import { ServiceStatus, InboundMessage, ReactionEvent, ReceiptEvent, GroupParticipantsUpdateEvent, GroupMember, ChatMetadata } from './types';
 import { enqueueWebhookEvent } from './queue';
 
 export class ConnectionManager {
@@ -77,6 +77,7 @@ export class ConnectionManager {
         this.sock.ev.removeAllListeners('groups.update');
         this.sock.ev.removeAllListeners('messages.reaction');
         this.sock.ev.removeAllListeners('message-receipt.update');
+        this.sock.ev.removeAllListeners('group-participants.update');
         this.sock.end(undefined);
       } catch { /* ignore */ }
       this.sock = null;
@@ -240,6 +241,25 @@ export class ConnectionManager {
         };
         await enqueueWebhookEvent(event);
       }
+    });
+
+    // Track group membership changes (join, leave, promote, demote)
+    this.sock.ev.on('group-participants.update', async ({ id, participants, action }) => {
+      const event: GroupParticipantsUpdateEvent = {
+        type: 'group_participants_update',
+        deviceId: this.deviceId,
+        chatId: id,
+        action,
+        participants: participants.map((p) => {
+          const resolvedJid = this.cache.resolveLid(p);
+          return {
+            jid: resolvedJid,
+            phone: resolvedJid.endsWith('@s.whatsapp.net') ? resolvedJid.split('@')[0] : null,
+          };
+        }),
+        timestamp: Math.floor(Date.now() / 1000),
+      };
+      await enqueueWebhookEvent(event);
     });
   }
 

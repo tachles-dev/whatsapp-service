@@ -84,7 +84,22 @@ export interface ReceiptEvent {
   timestamp: number;
 }
 
-export type WebhookEvent = InboundMessage | ReactionEvent | ReceiptEvent;
+export interface GroupParticipantsUpdateEvent {
+  type: 'group_participants_update';
+  deviceId: string;
+  chatId: string;
+  /** 'add' | 'remove' | 'promote' | 'demote' */
+  action: string;
+  participants: {
+    /** Resolved phone JID, or @lid fallback */
+    jid: string;
+    /** E.164-style phone number without +, or null if still a LID */
+    phone: string | null;
+  }[];
+  timestamp: number;
+}
+
+export type WebhookEvent = InboundMessage | ReactionEvent | ReceiptEvent | GroupParticipantsUpdateEvent;
 
 export interface StatusData {
   status: ServiceStatus;
