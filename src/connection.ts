@@ -183,11 +183,12 @@ export class ConnectionManager {
       for (const msg of messages) await this.handleInboundMessage(msg);
     });
 
-    // Track reactions on messages WE sent (key.fromMe === true).
-    // key = the original message's key; reaction.key = the reaction message's key (has the reactor's JID)
+    // Track reactions. We forward all of them and let the webhook handler decide
+    // if the messageId matches a known outbound message.
+    // key = the original message's key; reaction.key = the reaction message's key (reactor JID)
     this.sock.ev.on('messages.reaction', async (reactions: any[]) => {
       for (const { key, reaction } of reactions) {
-        if (!key?.id || !key.fromMe) continue;
+        if (!key?.id) continue;
         const event: ReactionEvent = {
           type: 'reaction',
           deviceId: this.deviceId,
@@ -210,7 +211,7 @@ export class ConnectionManager {
       // Group receipts by message key to batch them into one event per message
       const byKey = new Map<string, { key: any; receipts: any[] }>();
       for (const { key, receipt } of updates) {
-        if (!key?.id || !key.fromMe) continue;
+        if (!key?.id) continue;
         const existing = byKey.get(key.id);
         if (existing) existing.receipts.push(receipt);
         else byKey.set(key.id, { key, receipts: [receipt] });
