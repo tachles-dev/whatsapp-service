@@ -42,9 +42,11 @@ services:
       retries: 3
       start_period: 30s
 
-  # ── Caddy: TLS termination + reverse proxy ───────────────────────────────────
+  # ── Caddy: TLS termination + reverse proxy + rate limiting ────────────────────
   caddy:
-    image: caddy:2-alpine
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
     restart: unless-stopped
     ports:
       - "80:80"

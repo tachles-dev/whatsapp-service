@@ -2,6 +2,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { loadConfig } from '../config';
 import { verifyClientKey } from '../core/client-config';
+import { logger } from '../logger';
 import { fail, ok } from './helpers';
 import { registerConfigRoutes } from './config';
 import { registerDeviceRoutes } from './devices';
@@ -12,12 +13,56 @@ import { registerGroupRoutes } from './groups';
 import { registerAccessRoutes } from './access';
 import { registerAdminRoutes } from './admin';
 
+// ── In-process rate limiter (sliding window per IP) ─────────────────────────────────
+const RATE_LIMIT_MAX = 30;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const ipHits = new Map<string, number[]>();
+
+// Clean up stale entries every 2 minutes
+setInterval(() => {
+  const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS;
+  for (const [ip, timestamps] of ipHits) {
+    const recent = timestamps.filter((t) => t > cutoff);
+    if (recent.length === 0) ipHits.delete(ip);
+    else ipHits.set(ip, recent);
+  }
+}, 120_000).unref();
+
+function checkRateLimit(ip: string): { allowed: boolean; remaining: number } {
+  const now = Date.now();
+  const cutoff = now - RATE_LIMIT_WINDOW_MS;
+  let timestamps = ipHits.get(ip);
+  if (!timestamps) {
+    timestamps = [];
+    ipHits.set(ip, timestamps);
+  }
+  // Remove expired entries
+  while (timestamps.length > 0 && timestamps[0] <= cutoff) timestamps.shift();
+  if (timestamps.length >= RATE_LIMIT_MAX) {
+    return { allowed: false, remaining: 0 };
+  }
+  timestamps.push(now);
+  return { allowed: true, remaining: RATE_LIMIT_MAX - timestamps.length };
+}
+
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   const config = loadConfig();
 
   // ── Global auth guard ────────────────────────────────────────────────────
-  // All routes require x-api-key except the public health check.
+  // Rate limit + auth: runs on every request.
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
+    // Rate limit check (before auth, before everything)
+    const clientIp = request.ip;
+    const { allowed, remaining } = checkRateLimit(clientIp);
+    reply.header('x-ratelimit-limit', RATE_LIMIT_MAX);
+    reply.header('x-ratelimit-remaining', remaining);
+    if (!allowed) {
+      logger.warn({ ip: clientIp, url: request.url }, 'Rate limit exceeded');
+      reply.code(429).send(fail('RATE_LIMITED', 'Too many requests — try again later'));
+      return;
+    }
+
+    // Public endpoints — no auth required
     if (request.url === '/api/status') return;
     if (request.url === '/') return;
     if (request.url === '/admin') return;  // Static shell — no data; prompts for key in-browser

@@ -13,6 +13,19 @@
     protocols tls1.2 tls1.3
   }
 
+  # ── Rate limiting (caddy-ratelimit module) ──────────────────────────────────
+  # First line of defense: Caddy drops excess requests before they reach Node.
+  # 60 req/min per client IP — generous enough for normal use, tight enough to
+  # block automated abuse.  The app has its own 30 req/min limiter as a second
+  # layer with stricter limits.
+  rate_limit {
+    zone api {
+      key    {remote_host}
+      events 60
+      window 1m
+    }
+  }
+
   # ── Reverse proxy to the app ──────────────────────────────────────────────
   reverse_proxy app:3000
 

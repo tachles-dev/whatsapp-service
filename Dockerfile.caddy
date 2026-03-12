@@ -1,0 +1,11 @@
+# Dockerfile.caddy — build Caddy with the rate-limit module.
+#
+# Standard caddy:2-alpine does NOT include rate limiting.
+# This builds a custom binary using xcaddy, then drops it into the slim alpine image.
+
+FROM caddy:2-builder AS builder
+RUN xcaddy build \
+    --with github.com/mholt/caddy-ratelimit
+
+FROM caddy:2-alpine
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy

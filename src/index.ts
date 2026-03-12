@@ -1,7 +1,6 @@
 // index.ts — Entry point
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
-import rateLimit from '@fastify/rate-limit';
 import { loadConfig } from './config';
 import { logger, loggerConfig } from './logger';
 import { getRedis } from './redis';
@@ -25,13 +24,6 @@ async function main(): Promise<void> {
     origin: origins,
     methods: ['GET', 'POST', 'DELETE'],
     allowedHeaders: ['Content-Type', 'x-api-key'],
-  });
-
-  // Rate limiting — protect against brute-force and DoS
-  await app.register(rateLimit, {
-    max: 30,
-    timeWindow: '1 minute',
-    hook: 'onRequest',
   });
 
   // Connect Redis
