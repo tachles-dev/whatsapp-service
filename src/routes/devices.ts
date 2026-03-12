@@ -9,6 +9,7 @@
 //   POST   /api/clients/:clientId/devices/:deviceId/auth/reset      Clear credentials/re-QR
 //   POST   /api/clients/:clientId/devices/:deviceId/disconnect      Graceful disconnect
 //   POST   /api/clients/:clientId/devices/:deviceId/reconnect       Re-initiate connection
+//   POST   /api/clients/:clientId/devices/:deviceId/cache/flush     Wipe chat cache (force re-sync)
 //   GET    /api/clients/:clientId/devices/:deviceId/profile         Own WhatsApp profile
 //   PUT    /api/clients/:clientId/devices/:deviceId/profile/name    Update display name
 //   PUT    /api/clients/:clientId/devices/:deviceId/profile/status  Update status text
@@ -131,6 +132,17 @@ export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> 
       const manager = deviceManager.assertManager(clientId, deviceId);
       await manager.start();
       return ok({ reconnecting: true });
+    } catch (err) {
+      sendError(err, reply);
+    }
+  });
+
+  // POST /api/clients/:clientId/devices/:deviceId/cache/flush
+  app.post('/api/clients/:clientId/devices/:deviceId/cache/flush', async (request: FastifyRequest, reply) => {
+    const { clientId, deviceId } = request.params as DeviceParams;
+    try {
+      await deviceManager.flushChatCache(clientId, deviceId);
+      return ok({ flushed: true, message: 'Chat cache cleared. It will be rebuilt on the next WhatsApp sync event.' });
     } catch (err) {
       sendError(err, reply);
     }

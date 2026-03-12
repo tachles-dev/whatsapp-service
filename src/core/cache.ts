@@ -154,6 +154,16 @@ export class DeviceCache {
     return this.chats.size > 0;
   }
 
+  /**
+   * Wipe all chat entries from memory and Redis so the cache is rebuilt
+   * from scratch on the next Baileys contacts.upsert / messaging-history.set.
+   */
+  async clearChats(): Promise<void> {
+    this.chats.clear();
+    this.dirtyChatIds.clear();
+    await getRedis().del(this.key('chats'));
+  }
+
   // ── Persistence ──────────────────────────────────────────────────────────
 
   async flushChats(): Promise<void> {

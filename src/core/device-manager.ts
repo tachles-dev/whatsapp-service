@@ -219,6 +219,19 @@ class DeviceManager {
     return manager;
   }
 
+  /**
+   * Wipe the in-memory + Redis chat cache for a device so it is rebuilt from
+   * scratch on the next Baileys connection (contacts.upsert / messaging-history.set).
+   * Does NOT disconnect the device.
+   */
+  async flushChatCache(clientId: string, deviceId: string): Promise<void> {
+    this.assertOwnership(clientId, deviceId);
+    const cache = this.caches.get(deviceId);
+    if (!cache) throw new Error('Cache not found for device');
+    await cache.clearChats();
+    logger.info({ clientId, deviceId }, 'Chat cache flushed');
+  }
+
   private assertOwnership(clientId: string, deviceId: string): void {
     const info = this.infos.get(deviceId);
     if (!info || info.clientId !== clientId) {
