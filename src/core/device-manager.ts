@@ -220,16 +220,21 @@ class DeviceManager {
   }
 
   /**
-   * Wipe the in-memory + Redis chat cache for a device so it is rebuilt from
-   * scratch on the next Baileys connection (contacts.upsert / messaging-history.set).
-   * Does NOT disconnect the device.
+   * Wipe the in-memory + Redis chat cache for a device, then reconnect so Baileys
+   * replays contacts.upsert / messaging-history.set and rebuilds the cache.
    */
   async flushChatCache(clientId: string, deviceId: string): Promise<void> {
     this.assertOwnership(clientId, deviceId);
     const cache = this.caches.get(deviceId);
     if (!cache) throw new Error('Cache not found for device');
     await cache.clearChats();
-    logger.info({ clientId, deviceId }, 'Chat cache flushed');
+    // Reconnect so Baileys re-fires contacts.upsert and messaging-history.set.
+    // Without reconnecting, those events won't fire again on an already-open socket.
+    const manager = this.managers.get(deviceId);
+    if (manager) {
+      manager.start().catch((err) => logger.error({ err, deviceId }, 'Reconnect after cache flush failed'));
+    }
+    logger.info({ clientId, deviceId }, 'Chat cache flushed — reconnecting to rebuild contact cache');
   }
 
   /**

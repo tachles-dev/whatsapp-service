@@ -59,6 +59,10 @@ export class BaileysAdapter implements IWhatsAppAdapter {
   private maxReconnectAttempts = 10;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private phoneVerifier: ((phone: string) => Promise<boolean>) | null = null;
+  // Resolves when the first contacts.upsert or messaging-history.set fires after connecting.
+  // getChats() awaits this to avoid a race between the caller and the async contact sync.
+  private contactsReady: Promise<void> | null = null;
+  private contactsReadyResolve: (() => void) | null = null;
   // In-memory cache for msg payloads — avoids Redis reads for Baileys retries/quote lookups
   private msgCache = new Map<string, { data: string; expiry: number }>();
 
@@ -186,6 +190,13 @@ export class BaileysAdapter implements IWhatsAppAdapter {
       },
     });
 
+    // Reset the contacts-ready latch so getChats() can await the fresh sync.
+    this.contactsReady = new Promise<void>((resolve) => {
+      this.contactsReadyResolve = resolve;
+      // Auto-resolve after 10 s so callers never hang if contacts.upsert never fires.
+      setTimeout(() => { this.contactsReadyResolve?.(); this.contactsReadyResolve = null; }, 10_000);
+    });
+
     this.sock!.ev.on('creds.update', saveCreds);
     this.sock!.ev.on('connection.update', (update: Partial<ConnectionState>) => {
       this.handleConnectionUpdate(update);
@@ -248,6 +259,9 @@ export class BaileysAdapter implements IWhatsAppAdapter {
             : null,
         });
       }
+      // Signal that contact data has arrived so getChats() stops waiting.
+      this.contactsReadyResolve?.();
+      this.contactsReadyResolve = null;
     });
 
     // contacts.update fires with partial contact data — typically name/notify changes.
@@ -298,6 +312,9 @@ export class BaileysAdapter implements IWhatsAppAdapter {
             : null,
         });
       }
+      // Signal that contact data has arrived so getChats() stops waiting.
+      this.contactsReadyResolve?.();
+      this.contactsReadyResolve = null;
     });
 
     this.sock!.ev.on('messages.upsert', async ({ messages, type }) => {
@@ -783,14 +800,20 @@ export class BaileysAdapter implements IWhatsAppAdapter {
   // ── Chats ──────────────────────────────────────────────────────────────────
 
   async getChats(query?: string, kind?: 'CONTACT' | 'GROUP', hideUnnamed?: boolean): Promise<ChatMetadata[]> {
-    // If the cache has contacts (not just the group-seed entries), serve from cache.
+    // Fast path: contacts already in cache.
     if (this.cache.hasContactChats()) return this.cache.getChats(query, kind, hideUnnamed);
     this.assertConnected();
+    // Wait for the initial contacts.upsert / messaging-history.set that Baileys fires
+    // shortly after connecting.  This avoids the race where getChats() is called before
+    // that event fires and falls through to the groups-only seed permanently.
+    if (this.contactsReady) await this.contactsReady;
+    if (this.cache.hasContactChats()) return this.cache.getChats(query, kind, hideUnnamed);
+    // Still no contacts (WhatsApp didn't send any in this session) — seed from groups.
     const groups = await this.sock!.groupFetchAllParticipating();
     for (const [id, meta] of Object.entries(groups)) {
       this.cache.setChat({ id, name: meta.subject, notify: null, isGroup: true, phone: null });
     }
-    logger.info({ deviceId: this.deviceId, count: Object.keys(groups).length }, 'Chat cache seeded from group fetch');
+    logger.info({ deviceId: this.deviceId, count: Object.keys(groups).length }, 'Chat cache seeded from group fetch (no contacts received)');
     return this.cache.getChats(query, kind, hideUnnamed);
   }
 
