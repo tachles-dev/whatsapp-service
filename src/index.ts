@@ -15,7 +15,7 @@ async function main(): Promise<void> {
   // Load and validate env vars early
   const config = loadConfig();
 
-  const app = Fastify({ logger: loggerConfig });
+  const app = Fastify({ logger: loggerConfig, trustProxy: true });
 
   // CORS — auto-derived from WEBHOOK_URL + optional CORS_ORIGINS extras
   const webhookOrigin = new URL(config.WEBHOOK_URL).origin;
@@ -29,8 +29,9 @@ async function main(): Promise<void> {
 
   // Rate limiting — protect against brute-force and DoS
   await app.register(rateLimit, {
-    max: 50,
+    max: 30,
     timeWindow: '1 minute',
+    hook: 'onRequest',
   });
 
   // Connect Redis
