@@ -262,8 +262,11 @@ export class BaileysAdapter implements IWhatsAppAdapter {
     });
 
     this.sock!.ev.on('messages.upsert', async ({ messages, type }) => {
-      if (type !== 'notify') return;
-      for (const msg of messages) await this.handleInboundMessage(msg);
+      for (const msg of messages) {
+        // Extract LID mappings from every message (including fromMe) regardless of type.
+        this.extractLidMappings(msg.key as any);
+        if (type === 'notify') await this.handleInboundMessage(msg);
+      }
     });
 
     this.sock!.ev.on('messages.reaction', async (reactions: any[]) => {
@@ -426,6 +429,29 @@ export class BaileysAdapter implements IWhatsAppAdapter {
       this.reconnectAttempts = 0;
       this.qrCode = null;
       logger.info({ deviceId: this.deviceId, phone }, 'WhatsApp connected');
+    }
+  }
+
+  /**
+   * Extract LID → phone JID mappings from a message key whenever Baileys provides
+   * the Alt counterpart fields (remoteJidAlt / participantAlt).
+   */
+  private extractLidMappings(key: { remoteJid?: string | null; participant?: string | null; remoteJidAlt?: string; participantAlt?: string }): void {
+    if (key.remoteJid && key.remoteJidAlt) {
+      const [lid, phone] = key.remoteJid.endsWith('@lid')
+        ? [key.remoteJid, key.remoteJidAlt]
+        : [key.remoteJidAlt, key.remoteJid];
+      if (lid.endsWith('@lid') && phone.endsWith('@s.whatsapp.net')) {
+        this.cache.setLid(lid, phone);
+      }
+    }
+    if (key.participant && key.participantAlt) {
+      const [lid, phone] = key.participant.endsWith('@lid')
+        ? [key.participant, key.participantAlt]
+        : [key.participantAlt, key.participant];
+      if (lid.endsWith('@lid') && phone.endsWith('@s.whatsapp.net')) {
+        this.cache.setLid(lid, phone);
+      }
     }
   }
 

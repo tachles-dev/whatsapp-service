@@ -232,6 +232,17 @@ class DeviceManager {
     logger.info({ clientId, deviceId }, 'Chat cache flushed');
   }
 
+  /**
+   * Resolve a batch of JIDs (possibly LIDs) to their canonical phone JIDs.
+   * Returns a map of input JID → resolved phone JID, or null if unknown.
+   */
+  resolveLids(clientId: string, deviceId: string, jids: string[]): Record<string, string | null> {
+    this.assertOwnership(clientId, deviceId);
+    const cache = this.caches.get(deviceId);
+    if (!cache) throw new Error('Cache not found for device');
+    return cache.resolveLidBulk(jids);
+  }
+
   private assertOwnership(clientId: string, deviceId: string): void {
     const info = this.infos.get(deviceId);
     if (!info || info.clientId !== clientId) {

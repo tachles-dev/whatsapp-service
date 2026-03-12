@@ -11,6 +11,7 @@
 // Layer 2 — Extended operations:
 //   POST .../contacts/check-bulk      Check multiple phones at once (max 100)
 //   POST .../contacts/:jid/subscribe-presence
+//   POST .../contacts/resolve-lids    Resolve LID JIDs → phone JIDs (bulk, max 200)
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { deviceManager } from '../core/device-manager';
@@ -21,6 +22,10 @@ type ContactParams = DeviceParams & { jid: string };
 
 const checkBulkSchema = z.object({
   phones: z.array(z.string().regex(phonePattern, 'Phone must be digits only')).min(1).max(100),
+});
+
+const resolveLidsSchema = z.object({
+  jids: z.array(z.string().min(1)).min(1).max(200),
 });
 
 export async function registerContactRoutes(app: FastifyInstance): Promise<void> {
@@ -97,6 +102,17 @@ export async function registerContactRoutes(app: FastifyInstance): Promise<void>
       const manager = deviceManager.assertManager(clientId, deviceId);
       await manager.unblockContact(validateJid(jid));
       return ok({ unblocked: true });
+    } catch (err) { sendError(err, reply); }
+  });
+
+  // POST .../contacts/resolve-lids   — Layer 2
+  app.post('/api/clients/:clientId/devices/:deviceId/contacts/resolve-lids', async (request: FastifyRequest, reply) => {
+    const { clientId, deviceId } = request.params as DeviceParams;
+    const parsed = resolveLidsSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
+    try {
+      const resolved = deviceManager.resolveLids(clientId, deviceId, parsed.data.jids);
+      return ok(resolved);
     } catch (err) { sendError(err, reply); }
   });
 

@@ -81,6 +81,20 @@ export class DeviceCache {
     return this.lidMap.get(jid) ?? jid;
   }
 
+  /**
+   * Resolve a batch of JIDs that may be LIDs.
+   * Returns a map of input JID → resolved phone JID (or null if the LID is unknown).
+   * Non-LID JIDs are returned as-is.
+   */
+  resolveLidBulk(jids: string[]): Record<string, string | null> {
+    const result: Record<string, string | null> = {};
+    for (const jid of jids) {
+      if (!jid.endsWith('@lid')) { result[jid] = jid; continue; }
+      result[jid] = this.lidMap.get(jid) ?? null;
+    }
+    return result;
+  }
+
   isSubscribed(jid: string): boolean {
     return this.subscriptions.has(jid);
   }
@@ -119,9 +133,24 @@ export class DeviceCache {
       if (kind === 'CONTACT' && c.isGroup) continue;
       if (kind === 'GROUP' && !c.isGroup) continue;
 
+      // Resolve LID → phone JID on the way out so callers always get real JIDs.
+      // If the resolved JID already has its own proper entry, skip the LID duplicate.
+      let effectiveId = c.id;
+      let effectivePhone = c.phone;
+      if (c.id.endsWith('@lid')) {
+        const resolved = this.lidMap.get(c.id);
+        if (resolved) {
+          if (this.chats.has(resolved)) continue; // real entry exists — skip LID shadow
+          effectiveId = resolved;
+          effectivePhone = resolved.endsWith('@s.whatsapp.net')
+            ? resolved.slice(0, resolved.indexOf('@'))
+            : null;
+        }
+      }
+
       // Compute once per entry — reused for both hideUnnamed and sort key.
-      const rawId = c.id.includes('@') ? c.id.slice(0, c.id.indexOf('@')) : c.id;
-      const isNamed = c.name !== rawId && c.name !== c.phone;
+      const rawId = effectiveId.includes('@') ? effectiveId.slice(0, effectiveId.indexOf('@')) : effectiveId;
+      const isNamed = c.name !== rawId && c.name !== effectivePhone;
 
       if (hideUnnamed && !isNamed) continue;
 
@@ -131,11 +160,14 @@ export class DeviceCache {
         if (
           !nameLower.includes(q) &&
           !(notifyLower && notifyLower.includes(q)) &&
-          !(c.phone && c.phone.includes(q))
+          !(effectivePhone && effectivePhone.includes(q))
         ) continue;
       }
 
-      results.push({ chat: c, isNamed });
+      const chat: ChatMetadata = effectiveId !== c.id
+        ? { ...c, id: effectiveId, phone: effectivePhone }
+        : c;
+      results.push({ chat, isNamed });
     }
 
     if (q !== null) {
