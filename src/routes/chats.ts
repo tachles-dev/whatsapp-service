@@ -1,7 +1,11 @@
 // routes/chats.ts — Chat-level operations.
 //
 // Layer 1 — List + basic actions:
-//   GET    .../chats                  List chats (kind=all|individual|group, hideUnnamed=true)
+//   GET    .../chats                  List chats (kind=all|individual|group, hideUnnamed=true, q=<search term>)
+//                                     Supports ?q= text search across name/phone. Named contacts are ranked first.
+//                                     Use ?hideUnnamed=true to exclude contacts whose name is just the raw phone/JID number.
+//                                     Paginate with ?limit=<n>&offset=<n> (default limit=50, max=200).
+//                                     Response: { items, total, limit, offset }
 //   POST   .../chats/:jid/archive
 //   DELETE .../chats/:jid/archive
 //   POST   .../chats/:jid/mute       body: { duration: seconds | 0 = until manual unmute }
@@ -33,16 +37,17 @@ export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
   // GET .../chats
   app.get('/api/clients/:clientId/devices/:deviceId/chats', async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
-    const { kind, hideUnnamed } = request.query as { kind?: string; hideUnnamed?: string };
+    const { kind, hideUnnamed, q, limit: limitStr, offset: offsetStr } = request.query as {
+      kind?: string; hideUnnamed?: string; q?: string; limit?: string; offset?: string;
+    };
+    const limit = Math.min(200, Math.max(1, parseInt(limitStr ?? '50', 10) || 50));
+    const offset = Math.max(0, parseInt(offsetStr ?? '0', 10) || 0);
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      let chats = await manager.getChats();
-      if (kind === 'individual') chats = chats.filter((c) => !c.isGroup);
-      else if (kind === 'group') chats = chats.filter((c) => c.isGroup);
-      if (hideUnnamed === '1' || hideUnnamed === 'true') {
-        chats = chats.filter((c) => c.name);
-      }
-      return ok(chats);
+      const kindParam = kind === 'individual' ? 'CONTACT' : kind === 'group' ? 'GROUP' : undefined;
+      const hideUnnamedParam = hideUnnamed === '1' || hideUnnamed === 'true';
+      const all = await manager.getChats(q, kindParam, hideUnnamedParam);
+      return ok({ items: all.slice(offset, offset + limit), total: all.length, limit, offset });
     } catch (err) { sendError(err, reply); }
   });
 

@@ -5,3 +5,4 @@ dist/
 *.log
 *.pub
 ssh-hetzner
+web/

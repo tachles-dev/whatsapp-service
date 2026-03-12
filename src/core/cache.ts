@@ -111,21 +111,38 @@ export class DeviceCache {
   }
 
   getChats(query?: string, kind?: 'CONTACT' | 'GROUP', hideUnnamed?: boolean): ChatMetadata[] {
-    let all = [...this.chats.values()];
-    if (kind === 'CONTACT') all = all.filter((c) => !c.isGroup);
-    else if (kind === 'GROUP') all = all.filter((c) => c.isGroup);
-    if (hideUnnamed) {
-      all = all.filter((c) => {
-        // Keep only entries whose name is not just the raw phone/JID prefix
-        const rawId = c.id.split('@')[0];
-        return c.name !== rawId && c.name !== c.phone;
+    const q = query ? query.toLowerCase() : null;
+
+    // Single pass: apply all three filter conditions at once to avoid intermediate arrays.
+    const results: Array<{ chat: ChatMetadata; isNamed: boolean }> = [];
+    for (const c of this.chats.values()) {
+      if (kind === 'CONTACT' && c.isGroup) continue;
+      if (kind === 'GROUP' && !c.isGroup) continue;
+
+      // Compute once per entry — reused for both hideUnnamed and sort key.
+      const rawId = c.id.includes('@') ? c.id.slice(0, c.id.indexOf('@')) : c.id;
+      const isNamed = c.name !== rawId && c.name !== c.phone;
+
+      if (hideUnnamed && !isNamed) continue;
+
+      if (q !== null) {
+        const nameLower = c.name.toLowerCase();
+        if (!nameLower.includes(q) && !(c.phone && c.phone.includes(q))) continue;
+      }
+
+      results.push({ chat: c, isNamed });
+    }
+
+    if (q !== null) {
+      // Named contacts (saved name ≠ raw JID/phone) rank before unnamed/LID-only entries.
+      // isNamed is pre-computed so no extra work inside the comparator.
+      results.sort((a, b) => {
+        if (a.isNamed !== b.isNamed) return a.isNamed ? -1 : 1;
+        return a.chat.name.localeCompare(b.chat.name);
       });
     }
-    if (!query) return all;
-    const q = query.toLowerCase();
-    return all.filter(
-      (c) => c.name.toLowerCase().includes(q) || (c.phone && c.phone.includes(q)),
-    );
+
+    return results.map((r) => r.chat);
   }
 
   hasCachedChats(): boolean {
