@@ -229,8 +229,12 @@ export class BaileysAdapter implements IWhatsAppAdapter {
     this.sock!.ev.on('contacts.upsert', (contacts) => {
       for (const contact of contacts) {
         if (!contact.id || contact.id === 'status@broadcast') continue;
+        // Build LID → phone mapping from all available sources
         if (contact.lid && contact.id.endsWith('@s.whatsapp.net')) {
           this.cache.setLid(contact.lid as string, contact.id);
+        }
+        if (contact.id.endsWith('@lid') && contact.phoneNumber) {
+          this.cache.setLid(contact.id, contact.phoneNumber);
         }
         // Prefer address book name (contact.name = what YOU saved) over push name
         // (contact.notify = what THEY set). Both are stored so either is searchable.
@@ -239,7 +243,37 @@ export class BaileysAdapter implements IWhatsAppAdapter {
           name: contact.name || contact.verifiedName || contact.notify || contact.id.split('@')[0],
           notify: contact.notify || null,
           isGroup: contact.id.endsWith('@g.us'),
-          phone: contact.id.endsWith('@s.whatsapp.net') ? contact.id.split('@')[0] : null,
+          phone: contact.id.endsWith('@s.whatsapp.net') ? contact.id.split('@')[0]
+            : contact.phoneNumber ? contact.phoneNumber.split('@')[0]
+            : null,
+        });
+      }
+    });
+
+    // contacts.update fires with partial contact data — typically name/notify changes.
+    // Merge into existing cache entries; don't overwrite fields we don't have updates for.
+    this.sock!.ev.on('contacts.update', (updates) => {
+      for (const update of updates) {
+        if (!update.id || update.id === 'status@broadcast') continue;
+        if (update.id.endsWith('@lid') && update.phoneNumber) {
+          this.cache.setLid(update.id, update.phoneNumber);
+        }
+        if (update.lid && update.id.endsWith('@s.whatsapp.net')) {
+          this.cache.setLid(update.lid as string, update.id);
+        }
+        const existing = this.cache.getChat(update.id);
+        const rawId = update.id.includes('@') ? update.id.slice(0, update.id.indexOf('@')) : update.id;
+        const basePhone = existing?.phone
+          ?? (update.id.endsWith('@s.whatsapp.net') ? rawId : null)
+          ?? (update.phoneNumber ? update.phoneNumber.split('@')[0] : null);
+        const baseName = existing?.name ?? rawId;
+        const updatedName = update.name || update.verifiedName || update.notify || baseName;
+        this.cache.setChat({
+          id: existing?.id ?? update.id,
+          name: updatedName,
+          notify: update.notify ?? existing?.notify ?? null,
+          isGroup: (existing?.isGroup ?? update.id.endsWith('@g.us')),
+          phone: basePhone,
         });
       }
     });
@@ -251,12 +285,17 @@ export class BaileysAdapter implements IWhatsAppAdapter {
         if (contact.lid && contact.id.endsWith('@s.whatsapp.net')) {
           this.cache.setLid(contact.lid as string, contact.id);
         }
+        if (contact.id.endsWith('@lid') && contact.phoneNumber) {
+          this.cache.setLid(contact.id, contact.phoneNumber);
+        }
         this.cache.setChat({
           id: contact.id,
           name: contact.name || contact.verifiedName || contact.notify || contact.id.split('@')[0],
           notify: contact.notify || null,
           isGroup: contact.id.endsWith('@g.us'),
-          phone: contact.id.endsWith('@s.whatsapp.net') ? contact.id.split('@')[0] : null,
+          phone: contact.id.endsWith('@s.whatsapp.net') ? contact.id.split('@')[0]
+            : contact.phoneNumber ? contact.phoneNumber.split('@')[0]
+            : null,
         });
       }
     });
@@ -744,7 +783,8 @@ export class BaileysAdapter implements IWhatsAppAdapter {
   // ── Chats ──────────────────────────────────────────────────────────────────
 
   async getChats(query?: string, kind?: 'CONTACT' | 'GROUP', hideUnnamed?: boolean): Promise<ChatMetadata[]> {
-    if (this.cache.hasCachedChats()) return this.cache.getChats(query, kind, hideUnnamed);
+    // If the cache has contacts (not just the group-seed entries), serve from cache.
+    if (this.cache.hasContactChats()) return this.cache.getChats(query, kind, hideUnnamed);
     this.assertConnected();
     const groups = await this.sock!.groupFetchAllParticipating();
     for (const [id, meta] of Object.entries(groups)) {

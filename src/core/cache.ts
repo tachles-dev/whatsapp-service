@@ -186,6 +186,15 @@ export class DeviceCache {
     return this.chats.size > 0;
   }
 
+  /** True once at least one individual contact (non-group) has been stored.
+   *  Used to distinguish "cache seeded with groups only" from "contacts have arrived". */
+  hasContactChats(): boolean {
+    for (const c of this.chats.values()) {
+      if (!c.isGroup) return true;
+    }
+    return false;
+  }
+
   /**
    * Wipe all chat entries from memory and Redis so the cache is rebuilt
    * from scratch on the next Baileys contacts.upsert / messaging-history.set.
