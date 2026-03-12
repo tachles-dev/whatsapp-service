@@ -20,7 +20,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
     if (request.url === '/api/status') return;
     if (request.url === '/') return;
-    if (request.url === '/admin') return;
+    if (request.url === '/admin') return;  // Static shell — no data; prompts for key in-browser
 
     const masterKey = config.API_KEY;
     const providedKey = request.headers['x-api-key'] as string | undefined;

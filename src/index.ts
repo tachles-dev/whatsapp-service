@@ -1,6 +1,7 @@
 // index.ts — Entry point
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import rateLimit from '@fastify/rate-limit';
 import { loadConfig } from './config';
 import { logger, loggerConfig } from './logger';
 import { getRedis } from './redis';
@@ -16,10 +17,20 @@ async function main(): Promise<void> {
 
   const app = Fastify({ logger: loggerConfig });
 
-  // CORS for Next.js frontend calls
+  // CORS — auto-derived from WEBHOOK_URL + optional CORS_ORIGINS extras
+  const webhookOrigin = new URL(config.WEBHOOK_URL).origin;
+  const origins = [webhookOrigin, ...config.CORS_ORIGINS.filter((o) => o !== webhookOrigin)];
+
   await app.register(cors, {
-    origin: true,
+    origin: origins,
     methods: ['GET', 'POST', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'x-api-key'],
+  });
+
+  // Rate limiting — protect against brute-force and DoS
+  await app.register(rateLimit, {
+    max: 100,
+    timeWindow: '1 minute',
   });
 
   // Connect Redis

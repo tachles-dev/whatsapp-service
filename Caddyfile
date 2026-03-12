@@ -8,6 +8,11 @@
 
 {$DOMAIN} {
 
+  # ── TLS — enforce TLS 1.2+ ────────────────────────────────────────────────
+  tls {
+    protocols tls1.2 tls1.3
+  }
+
   # ── Reverse proxy to the app ──────────────────────────────────────────────
   reverse_proxy app:3000
 

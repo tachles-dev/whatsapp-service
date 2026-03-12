@@ -13,6 +13,10 @@ const envSchema = z.object({
   WEBHOOK_URL: z.string().url(),
   WEBHOOK_API_KEY: z.string().min(1),
   PROXY_URL: z.string().optional(),
+  CORS_ORIGINS: z
+    .string()
+    .default('')
+    .transform((val) => (val ? val.split(',').map((s) => s.trim()) : [])),
   ALLOWED_CONTACTS: z
     .string()
     .default('')

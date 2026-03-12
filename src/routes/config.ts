@@ -66,7 +66,7 @@ export async function registerConfigRoutes(app: FastifyInstance): Promise<void> 
   // Issues a new API key. Returns the plaintext key ONCE — it is never stored.
   // Optional body: { ttlDays: number }  (default 90, max 365)
   // Requires master API key.
-  app.post('/api/clients/:clientId/key', async (request: FastifyRequest, reply) => {
+  app.post('/api/clients/:clientId/key', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request: FastifyRequest, reply) => {
     const { clientId } = request.params as { clientId: string };
     const { ttlDays = 90 } = (request.body as { ttlDays?: number }) ?? {};
     const plaintext = await generateClientKey(clientId, ttlDays);
@@ -81,7 +81,7 @@ export async function registerConfigRoutes(app: FastifyInstance): Promise<void> 
   // The old key is invalidated immediately. Returns a new plaintext key ONCE.
   // Optional body: { ttlDays: number }  (default 90, max 365)
   // Can be called with either the master key or the client's own current key.
-  app.post('/api/clients/:clientId/key/rotate', async (request: FastifyRequest, reply) => {
+  app.post('/api/clients/:clientId/key/rotate', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request: FastifyRequest, reply) => {
     const { clientId } = request.params as { clientId: string };
     const { ttlDays = 90 } = (request.body as { ttlDays?: number }) ?? {};
     const provided = request.headers['x-api-key'] as string | undefined;
@@ -109,7 +109,7 @@ export async function registerConfigRoutes(app: FastifyInstance): Promise<void> 
 
   // DELETE /api/clients/:clientId/key
   // Revokes the client API key immediately. Requires master key.
-  app.delete('/api/clients/:clientId/key', async (request: FastifyRequest) => {
+  app.delete('/api/clients/:clientId/key', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request: FastifyRequest) => {
     const { clientId } = request.params as { clientId: string };
     await revokeClientKey(clientId);
     return ok({ revoked: true });
