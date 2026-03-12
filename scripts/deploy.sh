@@ -17,6 +17,6 @@ docker compose ps
 
 echo "==> [3/3] Health check..."
 sleep 5
-curl -sf http://localhost:3000/api/status && echo '' && echo '✓ Service is healthy' \
+docker compose exec app curl -sf http://localhost:3000/api/status && echo '' && echo '✓ Service is healthy' \
   || echo '⚠ Health check failed — run: docker compose logs app'
 

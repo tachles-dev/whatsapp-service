@@ -5,6 +5,9 @@ const envSchema = z.object({
   PORT: z.coerce.number().default(3000),
   HOST: z.string().default('0.0.0.0'),
   API_KEY: z.string().min(1, 'API_KEY is required'),
+  // Secret used to HMAC-sign per-client API keys before storing in Redis.
+  // Changing this invalidates all existing client keys.
+  KEY_SECRET: z.string().min(32, 'KEY_SECRET must be at least 32 chars'),
   REDIS_URL: z.string().url().default('redis://localhost:6379'),
   AUTH_BASE_DIR: z.string().default('/data/auth'),
   WEBHOOK_URL: z.string().url(),

@@ -1,7 +1,9 @@
 // core/client-config.ts — Per-client runtime configuration, stored in Redis and cached in memory.
+import * as crypto from 'crypto';
 import { getRedis } from '../redis';
 import { logger } from '../logger';
 import { ClientConfig } from '../types';
+import { loadConfig } from '../config';
 
 export const DEFAULT_CLIENT_CONFIG: ClientConfig = {
   events: {
@@ -91,6 +93,118 @@ class ClientConfigManager {
     this.configs.delete(clientId);
     logger.info({ clientId }, 'Client config reset to defaults');
   }
+
+  /** Internal: directly overwrite the in-memory config (used by key management). */
+  _setRaw(clientId: string, cfg: ClientConfig): void {
+    this.configs.set(clientId, cfg);
+  }
 }
 
 export const clientConfigManager = new ClientConfigManager();
+
+// ── Key management ────────────────────────────────────────────────────────────
+
+/**
+ * Compute HMAC-SHA256 of a plaintext key using KEY_SECRET.
+ * Without KEY_SECRET, stored hashes reveal nothing even if Redis is compromised.
+ */
+function hashKey(plaintext: string): string {
+  return crypto.createHmac('sha256', loadConfig().KEY_SECRET).update(plaintext).digest('hex');
+}
+
+/** Persist a config object to Redis and update the in-memory cache. */
+async function persistConfig(clientId: string, cfg: ClientConfig): Promise<void> {
+  await getRedis().set(`wa:client:${clientId}:config`, JSON.stringify(cfg));
+  clientConfigManager._setRaw(clientId, cfg);
+}
+
+/**
+ * Returns a safe view of the config for API responses.
+ * Strips the raw hash; exposes key metadata (expiry, last-used) instead.
+ */
+export function safeConfig(cfg: ClientConfig): object {
+  const { apiKeyHash, apiKeyExpiresAt, apiKeyLastUsedAt, apiKeyLastUsedIp, ...rest } = cfg;
+  return {
+    ...rest,
+    key: {
+      hasKey: !!apiKeyHash,
+      ...(apiKeyExpiresAt  !== undefined && { expiresAt:  apiKeyExpiresAt }),
+      ...(apiKeyLastUsedAt !== undefined && { lastUsedAt: apiKeyLastUsedAt }),
+      ...(apiKeyLastUsedIp !== undefined && { lastUsedIp: apiKeyLastUsedIp }),
+    },
+  };
+}
+
+/**
+ * Generate a new API key for a client.
+ * Stores only the HMAC hash + expiry. Returns the plaintext key ONCE — it is never stored.
+ * @param ttlDays How many days until the key expires (default 90, max 365).
+ */
+export async function generateClientKey(clientId: string, ttlDays = 90): Promise<string> {
+  const days = Math.min(Math.max(ttlDays, 1), 365);
+  const plaintext = crypto.randomBytes(32).toString('hex');
+  const current = clientConfigManager.getConfig(clientId);
+  const updated: ClientConfig = {
+    ...current,
+    apiKeyHash: hashKey(plaintext),
+    apiKeyExpiresAt: Date.now() + days * 24 * 60 * 60 * 1000,
+  };
+  delete updated.apiKeyLastUsedAt;
+  delete updated.apiKeyLastUsedIp;
+  await persistConfig(clientId, updated);
+  logger.info({ clientId, days, expiresAt: updated.apiKeyExpiresAt }, 'Client API key generated');
+  return plaintext;
+}
+
+/**
+ * Verify a provided plaintext key against the stored hash.
+ * Checks HMAC match AND expiry. On success, updates last-used metadata.
+ * Returns true if the key is valid and not expired.
+ */
+export async function verifyClientKey(clientId: string, plaintext: string, ip?: string): Promise<boolean> {
+  const cfg = clientConfigManager.getConfig(clientId);
+  if (!cfg.apiKeyHash || !cfg.apiKeyExpiresAt) return false;
+  if (Date.now() > cfg.apiKeyExpiresAt) return false;
+
+  const provided = hashKey(plaintext);
+  // Both strings are hex digests of the same HMAC, so lengths are always equal.
+  // timingSafeEqual guards against timing-based hash oracle attacks.
+  const match = crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(cfg.apiKeyHash));
+  if (!match) return false;
+
+  // Update last-used metadata asynchronously — do not let Redis errors block auth.
+  const updated: ClientConfig = { ...cfg, apiKeyLastUsedAt: Date.now(), apiKeyLastUsedIp: ip };
+  persistConfig(clientId, updated).catch((err) =>
+    logger.warn({ clientId, err }, 'Failed to update key last-used metadata'),
+  );
+  return true;
+}
+
+/**
+ * Rotate a client's key using their current valid key.
+ * The old key is invalidated immediately; the new plaintext is returned once.
+ * Returns null if the current key is invalid or expired (master key needed to re-issue).
+ */
+export async function rotateClientKey(clientId: string, currentPlaintext: string, ttlDays = 90): Promise<string | null> {
+  const cfg = clientConfigManager.getConfig(clientId);
+  if (!cfg.apiKeyHash || !cfg.apiKeyExpiresAt) return null;
+  if (Date.now() > cfg.apiKeyExpiresAt) return null;
+
+  const provided = hashKey(currentPlaintext);
+  const match = crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(cfg.apiKeyHash));
+  if (!match) return null;
+
+  return generateClientKey(clientId, ttlDays);
+}
+
+/** Revoke a client's API key immediately. Any in-flight requests will still complete. */
+export async function revokeClientKey(clientId: string): Promise<void> {
+  const current = clientConfigManager.getConfig(clientId);
+  const updated: ClientConfig = { ...current };
+  delete updated.apiKeyHash;
+  delete updated.apiKeyExpiresAt;
+  delete updated.apiKeyLastUsedAt;
+  delete updated.apiKeyLastUsedIp;
+  await persistConfig(clientId, updated);
+  logger.info({ clientId }, 'Client API key revoked');
+}

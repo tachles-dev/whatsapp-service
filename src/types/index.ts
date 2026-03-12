@@ -429,6 +429,18 @@ export interface IWhatsAppAdapter {
 // ── Client config ─────────────────────────────────────────────────────────
 
 export interface ClientConfig {
+  /**
+   * HMAC-SHA256 hash of the client's API key.
+   * The plaintext key is returned once on generation and never stored.
+   * Verified at request time by re-hashing the provided key.
+   */
+  apiKeyHash?: string;
+  /** Unix ms — key is rejected after this timestamp. */
+  apiKeyExpiresAt?: number;
+  /** Unix ms — timestamp of the last successful authenticated request. */
+  apiKeyLastUsedAt?: number;
+  /** IP address of the last successful authenticated request. */
+  apiKeyLastUsedIp?: string;
   /** Per-client webhook URL. Falls back to global WEBHOOK_URL env var if absent. */
   webhookUrl?: string;
   /** Per-client webhook API key. Falls back to global WEBHOOK_API_KEY env var if absent. */
