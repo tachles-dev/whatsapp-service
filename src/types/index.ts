@@ -151,7 +151,10 @@ export interface ContactStatusInfo {
 
 export interface ChatMetadata {
   id: string;
+  /** Address book name (contact.name) if available, otherwise push name (contact.notify). */
   name: string;
+  /** Raw WhatsApp push name — stored separately so both fields are searchable. */
+  notify: string | null;
   isGroup: boolean;
   phone: string | null;
 }

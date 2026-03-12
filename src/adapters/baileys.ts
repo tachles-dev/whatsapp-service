@@ -193,7 +193,7 @@ export class BaileysAdapter implements IWhatsAppAdapter {
 
     this.sock!.ev.on('groups.upsert', (groups) => {
       for (const group of groups) {
-        this.cache.setChat({ id: group.id, name: group.subject, isGroup: true, phone: null });
+        this.cache.setChat({ id: group.id, name: group.subject, notify: null, isGroup: true, phone: null });
       }
     });
 
@@ -204,7 +204,7 @@ export class BaileysAdapter implements IWhatsAppAdapter {
         this.cache.setChat(
           existing
             ? { ...existing, ...(update.subject ? { name: update.subject } : {}) }
-            : { id: update.id, name: update.subject || update.id, isGroup: true, phone: null },
+            : { id: update.id, name: update.subject || update.id, notify: null, isGroup: true, phone: null },
         );
 
         // Emit GroupUpdateEvent if subscribed and client has groupUpdates enabled
@@ -232,9 +232,12 @@ export class BaileysAdapter implements IWhatsAppAdapter {
         if (contact.lid && contact.id.endsWith('@s.whatsapp.net')) {
           this.cache.setLid(contact.lid as string, contact.id);
         }
+        // Prefer address book name (contact.name = what YOU saved) over push name
+        // (contact.notify = what THEY set). Both are stored so either is searchable.
         this.cache.setChat({
           id: contact.id,
-          name: contact.notify || contact.verifiedName || contact.name || contact.id.split('@')[0],
+          name: contact.name || contact.verifiedName || contact.notify || contact.id.split('@')[0],
+          notify: contact.notify || null,
           isGroup: contact.id.endsWith('@g.us'),
           phone: contact.id.endsWith('@s.whatsapp.net') ? contact.id.split('@')[0] : null,
         });
@@ -250,7 +253,8 @@ export class BaileysAdapter implements IWhatsAppAdapter {
         }
         this.cache.setChat({
           id: contact.id,
-          name: contact.notify || contact.verifiedName || contact.name || contact.id.split('@')[0],
+          name: contact.name || contact.verifiedName || contact.notify || contact.id.split('@')[0],
+          notify: contact.notify || null,
           isGroup: contact.id.endsWith('@g.us'),
           phone: contact.id.endsWith('@s.whatsapp.net') ? contact.id.split('@')[0] : null,
         });
@@ -439,6 +443,27 @@ export class BaileysAdapter implements IWhatsAppAdapter {
     const messageId = msg.key.id;
     if (!messageId) return;
     if (!this.cache.isNewMessage(messageId)) return;
+
+    // Enrich the contact cache with the sender's push name, which is present on every
+    // message. This catches contacts that never appeared in contacts.upsert — they will
+    // show with a real name the first time they message rather than a bare JID/phone.
+    if (msg.pushName) {
+      const senderJid = msg.key.participant || remoteJid; // participant is set in group msgs
+      const resolved = this.cache.resolveLid(senderJid);
+      if (!resolved.endsWith('@g.us')) {
+        const existing = this.cache.getChat(resolved);
+        const rawId = resolved.includes('@') ? resolved.slice(0, resolved.indexOf('@')) : resolved;
+        // Only overwrite name if no address-book name has been set (i.e. it's still just the number)
+        const hasAddressBookName = existing && existing.name !== rawId && existing.name !== existing.phone;
+        this.cache.setChat({
+          id: resolved,
+          name: hasAddressBookName ? existing!.name : msg.pushName,
+          notify: msg.pushName,
+          isGroup: false,
+          phone: resolved.endsWith('@s.whatsapp.net') ? rawId : null,
+        });
+      }
+    }
 
     if (msg.message) {
       const encoded = Buffer.from(proto.Message.encode(msg.message).finish()).toString('base64');
@@ -646,7 +671,7 @@ export class BaileysAdapter implements IWhatsAppAdapter {
     const results = await this.sock!.onWhatsApp(phone);
     if (!results?.length || !results[0].exists) return { phone, exists: false, jid: null };
     const jid = results[0].jid ?? null;
-    if (jid) this.cache.setChat({ id: jid, name: phone, isGroup: false, phone });
+    if (jid) this.cache.setChat({ id: jid, name: phone, notify: null, isGroup: false, phone });
     logger.info({ deviceId: this.deviceId, phone, jid }, 'Phone lookup succeeded — contact cached');
     return { phone, exists: true, jid };
   }
@@ -697,7 +722,7 @@ export class BaileysAdapter implements IWhatsAppAdapter {
     this.assertConnected();
     const groups = await this.sock!.groupFetchAllParticipating();
     for (const [id, meta] of Object.entries(groups)) {
-      this.cache.setChat({ id, name: meta.subject, isGroup: true, phone: null });
+      this.cache.setChat({ id, name: meta.subject, notify: null, isGroup: true, phone: null });
     }
     logger.info({ deviceId: this.deviceId, count: Object.keys(groups).length }, 'Chat cache seeded from group fetch');
     return this.cache.getChats(query, kind, hideUnnamed);

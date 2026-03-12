@@ -127,7 +127,12 @@ export class DeviceCache {
 
       if (q !== null) {
         const nameLower = c.name.toLowerCase();
-        if (!nameLower.includes(q) && !(c.phone && c.phone.includes(q))) continue;
+        const notifyLower = c.notify ? c.notify.toLowerCase() : null;
+        if (
+          !nameLower.includes(q) &&
+          !(notifyLower && notifyLower.includes(q)) &&
+          !(c.phone && c.phone.includes(q))
+        ) continue;
       }
 
       results.push({ chat: c, isNamed });
