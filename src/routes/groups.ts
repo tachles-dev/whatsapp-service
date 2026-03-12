@@ -28,7 +28,7 @@
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { deviceManager } from '../core/device-manager';
-import { ok, fail, sendError } from './helpers';
+import { ok, fail, sendError, validateJid } from './helpers';
 import { GroupSetting } from '../types';
 
 type DeviceParams = { clientId: string; deviceId: string };
@@ -75,7 +75,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
     const { clientId, deviceId, jid } = request.params as GroupParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      await manager.subscribe(decodeURIComponent(jid));
+      await manager.subscribe(validateJid(jid));
       return ok({ subscribed: true });
     } catch (err) { sendError(err, reply); }
   });
@@ -85,7 +85,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
     const { clientId, deviceId, jid } = request.params as GroupParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      await manager.unsubscribe(decodeURIComponent(jid));
+      await manager.unsubscribe(validateJid(jid));
       return ok({ subscribed: false });
     } catch (err) { sendError(err, reply); }
   });
@@ -97,7 +97,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
     const { clientId, deviceId, jid } = request.params as GroupParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      const meta = await manager.getGroupMetadata(decodeURIComponent(jid));
+      const meta = await manager.getGroupMetadata(validateJid(jid));
       return ok(meta);
     } catch (err) { sendError(err, reply); }
   });
@@ -107,7 +107,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
     const { clientId, deviceId, jid } = request.params as GroupParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      const meta = await manager.getGroupMetadata(decodeURIComponent(jid));
+      const meta = await manager.getGroupMetadata(validateJid(jid));
       return ok(meta.participants);
     } catch (err) { sendError(err, reply); }
   });
@@ -133,7 +133,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      await manager.updateGroupSubject(decodeURIComponent(jid), parsed.data.subject);
+      await manager.updateGroupSubject(validateJid(jid), parsed.data.subject);
       return ok({ updated: true });
     } catch (err) { sendError(err, reply); }
   });
@@ -145,7 +145,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      await manager.updateGroupDescription(decodeURIComponent(jid), parsed.data.description);
+      await manager.updateGroupDescription(validateJid(jid), parsed.data.description);
       return ok({ updated: true });
     } catch (err) { sendError(err, reply); }
   });
@@ -159,7 +159,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      const result = await manager.updateGroupParticipants(decodeURIComponent(jid), parsed.data.participants, parsed.data.action);
+      const result = await manager.updateGroupParticipants(validateJid(jid), parsed.data.participants, parsed.data.action);
       return ok(result);
     } catch (err) { sendError(err, reply); }
   });
@@ -173,7 +173,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      await manager.updateGroupSettings(decodeURIComponent(jid), parsed.data.setting);
+      await manager.updateGroupSettings(validateJid(jid), parsed.data.setting);
       return ok({ updated: true });
     } catch (err) { sendError(err, reply); }
   });
@@ -183,7 +183,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
     const { clientId, deviceId, jid } = request.params as GroupParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      await manager.leaveGroup(decodeURIComponent(jid));
+      await manager.leaveGroup(validateJid(jid));
       return ok({ left: true });
     } catch (err) { sendError(err, reply); }
   });
@@ -195,7 +195,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
     const { clientId, deviceId, jid } = request.params as GroupParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      const code = await manager.getGroupInviteCode(decodeURIComponent(jid));
+      const code = await manager.getGroupInviteCode(validateJid(jid));
       return ok({ inviteCode: code, inviteLink: `https://chat.whatsapp.com/${code}` });
     } catch (err) { sendError(err, reply); }
   });
@@ -205,7 +205,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
     const { clientId, deviceId, jid } = request.params as GroupParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      const code = await manager.revokeGroupInviteCode(decodeURIComponent(jid));
+      const code = await manager.revokeGroupInviteCode(validateJid(jid));
       return ok({ inviteCode: code, inviteLink: `https://chat.whatsapp.com/${code}` });
     } catch (err) { sendError(err, reply); }
   });

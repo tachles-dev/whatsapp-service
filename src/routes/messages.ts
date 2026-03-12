@@ -19,7 +19,7 @@ import { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { deviceManager } from '../core/device-manager';
 import { logger } from '../logger';
-import { ok, fail, sendError, jidPattern, phonePattern } from './helpers';
+import { ok, fail, sendError, jidPattern, phonePattern, isBlockedMediaUrl, validateJid } from './helpers';
 
 type DeviceParams = { clientId: string; deviceId: string };
 type MessageParams = DeviceParams & { messageId: string };
@@ -33,8 +33,9 @@ const jidOrPhone = z
 
 const mediaSource = z.object({
   url: z.string().url().optional(),
-  base64: z.string().optional(),
-}).refine((d) => d.url || d.base64, { message: 'Provide either url or base64' });
+  base64: z.string().max(20_000_000).optional(),
+}).refine((d) => d.url || d.base64, { message: 'Provide either url or base64' })
+  .refine((d) => !d.url || !isBlockedMediaUrl(d.url), { message: 'Media URL points to a restricted address' });
 
 const sendOptions = z.object({
   quotedMessageId: z.string().optional(),

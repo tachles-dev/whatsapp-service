@@ -14,7 +14,7 @@
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { deviceManager } from '../core/device-manager';
-import { ok, fail, sendError, phonePattern, jidPattern } from './helpers';
+import { ok, fail, sendError, phonePattern, jidPattern, validateJid } from './helpers';
 
 type DeviceParams = { clientId: string; deviceId: string };
 type ContactParams = DeviceParams & { jid: string };
@@ -65,7 +65,7 @@ export async function registerContactRoutes(app: FastifyInstance): Promise<void>
     const { clientId, deviceId, jid } = request.params as ContactParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      const url = await manager.getProfilePicture(decodeURIComponent(jid));
+      const url = await manager.getProfilePicture(validateJid(jid));
       return ok({ url });
     } catch (err) { sendError(err, reply); }
   });
@@ -75,7 +75,7 @@ export async function registerContactRoutes(app: FastifyInstance): Promise<void>
     const { clientId, deviceId, jid } = request.params as ContactParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      const result = await manager.getContactStatus(decodeURIComponent(jid));
+      const result = await manager.getContactStatus(validateJid(jid));
       return ok(result);
     } catch (err) { sendError(err, reply); }
   });
@@ -85,7 +85,7 @@ export async function registerContactRoutes(app: FastifyInstance): Promise<void>
     const { clientId, deviceId, jid } = request.params as ContactParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      await manager.blockContact(decodeURIComponent(jid));
+      await manager.blockContact(validateJid(jid));
       return ok({ blocked: true });
     } catch (err) { sendError(err, reply); }
   });
@@ -95,7 +95,7 @@ export async function registerContactRoutes(app: FastifyInstance): Promise<void>
     const { clientId, deviceId, jid } = request.params as ContactParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      await manager.unblockContact(decodeURIComponent(jid));
+      await manager.unblockContact(validateJid(jid));
       return ok({ unblocked: true });
     } catch (err) { sendError(err, reply); }
   });
@@ -105,7 +105,7 @@ export async function registerContactRoutes(app: FastifyInstance): Promise<void>
     const { clientId, deviceId, jid } = request.params as ContactParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      await manager.subscribeToPresence(decodeURIComponent(jid));
+      await manager.subscribeToPresence(validateJid(jid));
       return ok({ subscribed: true });
     } catch (err) { sendError(err, reply); }
   });

@@ -16,7 +16,7 @@
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { deviceManager } from '../core/device-manager';
-import { ok, fail, sendError } from './helpers';
+import { ok, fail, sendError, validateJid } from './helpers';
 
 type DeviceParams = { clientId: string; deviceId: string };
 type ChatParams = DeviceParams & { jid: string };
@@ -51,7 +51,7 @@ export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
     const { clientId, deviceId, jid } = request.params as ChatParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      await manager.archiveChat(decodeURIComponent(jid), true);
+      await manager.archiveChat(validateJid(jid), true);
       return ok({ archived: true });
     } catch (err) { sendError(err, reply); }
   });
@@ -61,7 +61,7 @@ export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
     const { clientId, deviceId, jid } = request.params as ChatParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      await manager.archiveChat(decodeURIComponent(jid), false);
+      await manager.archiveChat(validateJid(jid), false);
       return ok({ archived: false });
     } catch (err) { sendError(err, reply); }
   });
@@ -75,7 +75,7 @@ export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
       const manager = deviceManager.assertManager(clientId, deviceId);
       // duration=0 means unmute (null); any positive value is converted from seconds to ms
       const muteDurationMs = parsed.data.duration === 0 ? null : parsed.data.duration * 1000;
-      await manager.muteChat(decodeURIComponent(jid), muteDurationMs);
+      await manager.muteChat(validateJid(jid), muteDurationMs);
       return ok({ muted: muteDurationMs !== null, duration: parsed.data.duration });
     } catch (err) { sendError(err, reply); }
   });
@@ -85,7 +85,7 @@ export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
     const { clientId, deviceId, jid } = request.params as ChatParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      await manager.muteChat(decodeURIComponent(jid), null);
+      await manager.muteChat(validateJid(jid), null);
       return ok({ muted: false });
     } catch (err) { sendError(err, reply); }
   });
@@ -95,7 +95,7 @@ export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
     const { clientId, deviceId, jid } = request.params as ChatParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      await manager.pinChat(decodeURIComponent(jid), true);
+      await manager.pinChat(validateJid(jid), true);
       return ok({ pinned: true });
     } catch (err) { sendError(err, reply); }
   });
@@ -105,7 +105,7 @@ export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
     const { clientId, deviceId, jid } = request.params as ChatParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      await manager.pinChat(decodeURIComponent(jid), false);
+      await manager.pinChat(validateJid(jid), false);
       return ok({ pinned: false });
     } catch (err) { sendError(err, reply); }
   });
@@ -115,7 +115,7 @@ export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
     const { clientId, deviceId, jid } = request.params as ChatParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      await manager.markRead(decodeURIComponent(jid), []);
+      await manager.markRead(validateJid(jid), []);
       return ok({ read: true });
     } catch (err) { sendError(err, reply); }
   });
@@ -125,7 +125,7 @@ export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
     const { clientId, deviceId, jid } = request.params as ChatParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      await manager.deleteChat(decodeURIComponent(jid));
+      await manager.deleteChat(validateJid(jid));
       return ok({ deleted: true });
     } catch (err) { sendError(err, reply); }
   });
@@ -137,7 +137,7 @@ export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      await manager.setEphemeralExpiration(decodeURIComponent(jid), parsed.data.expiration);
+      await manager.setEphemeralExpiration(validateJid(jid), parsed.data.expiration);
       return ok({ expiration: parsed.data.expiration });
     } catch (err) { sendError(err, reply); }
   });

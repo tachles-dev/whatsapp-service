@@ -1,4 +1,5 @@
 // queue/delivery.ts — HTTP delivery of webhook events to client endpoints.
+import { createHmac } from 'crypto';
 import { loadConfig } from '../config';
 import { logger } from '../logger';
 import { WebhookEvent } from '../types';
@@ -15,13 +16,17 @@ export async function deliverWebhook(
   const url = overrides?.webhookUrl || config.WEBHOOK_URL;
   const apiKey = overrides?.webhookApiKey || config.WEBHOOK_API_KEY;
 
+  const bodyStr = JSON.stringify(message);
+  const signature = createHmac('sha256', apiKey).update(bodyStr).digest('hex');
+
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'x-api-key': apiKey,
+      'x-webhook-signature': `sha256=${signature}`,
     },
-    body: JSON.stringify(message),
+    body: bodyStr,
     signal: AbortSignal.timeout(10_000),
   });
 

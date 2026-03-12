@@ -25,6 +25,9 @@
     # HSTS — browser won't attempt plain HTTP after first visit
     Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
 
+    # Content-Security-Policy — lock down the admin dashboard
+    Content-Security-Policy "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'"
+
     # Iframe embedding — deny unless same origin
     X-Frame-Options DENY
 
