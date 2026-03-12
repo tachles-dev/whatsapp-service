@@ -29,7 +29,7 @@ async function main(): Promise<void> {
 
   // Rate limiting — protect against brute-force and DoS
   await app.register(rateLimit, {
-    max: 100,
+    max: 50,
     timeWindow: '1 minute',
   });
 
