@@ -448,11 +448,11 @@ export async function POST(request: Request) {
 
 ## 7. WhatsApp Gateway Service Integration
 
-### 7.1 WGS Client (`lib/wgs-client.ts`)
+### 7.1 WGS Client (`lib/wgs.ts`)
 
 ```typescript
-const WGS_URL = process.env.WGS_URL;     // e.g. https://whatsapp-service.onrender.com
-const WGS_KEY = process.env.WGS_API_KEY;
+const WGS_URL = process.env.WGS_URL;     // e.g. https://gateway.example.com
+const WGS_KEY = process.env.WGS_MASTER_KEY;
 
 export const wgs = {
   async getStatus() {
@@ -481,7 +481,7 @@ export const wgs = {
 };
 ```
 
-### 7.2 Inbound Webhook Handler (`/api/webhook/whatsapp/route.ts`)
+### 7.2 Inbound Webhook Handler (`/api/webhooks/whatsapp/route.ts`)
 
 Receives messages and heartbeats from WGS:
 
@@ -500,7 +500,7 @@ export async function POST(request: Request) {
 ```env
 # WhatsApp Gateway Service
 WGS_URL=https://your-whatsapp-service.onrender.com
-WGS_API_KEY=same-key-as-WGS-API_KEY
+WGS_MASTER_KEY=same-key-as-WGS-API_KEY
 
 # WGS sends webhooks to this app — must match WGS WEBHOOK_API_KEY
 WGS_WEBHOOK_SECRET=same-key-as-WGS-WEBHOOK_API_KEY
@@ -537,7 +537,7 @@ NEXTAUTH_URL=https://your-app.vercel.app
 | Method | Route | Source | Description |
 |--------|-------|--------|-------------|
 | POST | `/api/webhook/google-form` | Google Apps Script | Ingest form submissions |
-| POST | `/api/webhook/whatsapp` | WGS | Inbound messages + heartbeat |
+| POST | `/api/webhooks/whatsapp` | WGS | Inbound messages + heartbeat |
 
 ### Proxy Routes (authenticated, admin/team lead)
 

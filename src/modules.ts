@@ -25,8 +25,8 @@ export const DEFAULT_MODULES: ModuleFlags = {
   heartbeat: true,
   webhooks: true,
   scheduling: true,
-  multiInstanceLeasing: true,
-  ownerForwarding: true,
+  multiInstanceLeasing: false,
+  ownerForwarding: false,
 };
 
 export const MODULE_PROFILES: Record<ModuleProfileName, ModuleFlags> = {

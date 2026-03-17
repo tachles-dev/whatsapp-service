@@ -122,7 +122,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
       const group = await manager.createGroup(parsed.data.subject, parsed.data.participants);
-      return reply.code(201).send({ ok: true, data: group });
+      return reply.code(201).send(ok(group));
     } catch (err) { sendError(err, reply); }
   });
 

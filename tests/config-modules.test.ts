@@ -48,6 +48,21 @@ test('lite profile disables heavy modules', () => {
   assert.equal(config.modules.ownerForwarding, false);
 });
 
+test('default module set does not require instance base url', () => {
+  process.env.API_KEY = 'x'.repeat(32);
+  process.env.KEY_SECRET = 'y'.repeat(32);
+  process.env.REDIS_URL = 'redis://localhost:6379';
+  process.env.WEBHOOK_URL = 'https://example.com/webhook';
+  process.env.WEBHOOK_API_KEY = 'secret';
+
+  const config = loadConfig();
+  assert.equal(config.modules.admin, true);
+  assert.equal(config.modules.audit, true);
+  assert.equal(config.modules.scheduling, true);
+  assert.equal(config.modules.multiInstanceLeasing, false);
+  assert.equal(config.modules.ownerForwarding, false);
+});
+
 test('full profile requires instance base url when owner forwarding remains enabled', () => {
   process.env.API_KEY = 'x'.repeat(32);
   process.env.KEY_SECRET = 'y'.repeat(32);
