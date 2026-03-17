@@ -20,6 +20,8 @@ import { deviceManager } from '../core/device-manager';
 import { getRedis } from '../redis';
 import { ServiceStatus, PresenceType } from '../types';
 import { ok, fail, sendError } from './helpers';
+import { scheduledMessageService } from '../services/scheduled-messages';
+import { recordAuditEvent } from '../audit-log';
 
 type DeviceParams = { clientId: string; deviceId: string };
 
@@ -52,6 +54,7 @@ export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> 
     }
     try {
       const info = await deviceManager.createDevice(clientId, parsed.data.name);
+      await recordAuditEvent({ action: 'device.created', actorType: 'master-key', actorId: 'master', ip: request.ip, clientId, deviceId: info.id, metadata: { name: parsed.data.name } });
       return reply.code(201).send(ok(info));
     } catch (err) {
       sendError(err, reply);
@@ -62,7 +65,9 @@ export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> 
   app.delete('/api/clients/:clientId/devices/:deviceId', async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     try {
+      await scheduledMessageService.purgeDeviceScheduledMessages(clientId, deviceId);
       await deviceManager.removeDevice(clientId, deviceId);
+      await recordAuditEvent({ action: 'device.deleted', actorType: 'master-key', actorId: 'master', ip: request.ip, clientId, deviceId });
       return ok({ deleted: true });
     } catch (err) {
       sendError(err, reply);
@@ -107,6 +112,7 @@ export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> 
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
       await manager.resetAuth();
+      await recordAuditEvent({ action: 'device.auth.reset', actorType: 'master-key', actorId: 'master', ip: request.ip, clientId, deviceId });
       return ok({ message: 'Auth cleared. New QR will be generated shortly.' });
     } catch (err) {
       sendError(err, reply);
@@ -119,6 +125,7 @@ export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> 
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
       await manager.close();
+      await recordAuditEvent({ action: 'device.disconnected', actorType: 'master-key', actorId: 'master', ip: request.ip, clientId, deviceId });
       return ok({ disconnected: true });
     } catch (err) {
       sendError(err, reply);
@@ -131,6 +138,7 @@ export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> 
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
       await manager.start();
+      await recordAuditEvent({ action: 'device.reconnect.requested', actorType: 'master-key', actorId: 'master', ip: request.ip, clientId, deviceId });
       return ok({ reconnecting: true });
     } catch (err) {
       sendError(err, reply);
@@ -142,6 +150,7 @@ export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> 
     const { clientId, deviceId } = request.params as DeviceParams;
     try {
       await deviceManager.flushChatCache(clientId, deviceId);
+      await recordAuditEvent({ action: 'device.cache.flushed', actorType: 'master-key', actorId: 'master', ip: request.ip, clientId, deviceId });
       return ok({ flushed: true, message: 'Chat cache cleared. It will be rebuilt on the next WhatsApp sync event.' });
     } catch (err) {
       sendError(err, reply);

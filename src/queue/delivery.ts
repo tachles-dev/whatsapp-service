@@ -13,8 +13,10 @@ export async function deliverWebhook(
   overrides?: { webhookUrl?: string; webhookApiKey?: string },
 ): Promise<void> {
   const config = loadConfig();
+  if (!config.modules.webhooks) return;
   const url = overrides?.webhookUrl || config.WEBHOOK_URL;
   const apiKey = overrides?.webhookApiKey || config.WEBHOOK_API_KEY;
+  if (!url || !apiKey) throw new Error('Webhook delivery is enabled but webhook configuration is missing');
 
   const bodyStr = JSON.stringify(message);
   const signature = createHmac('sha256', apiKey).update(bodyStr).digest('hex');

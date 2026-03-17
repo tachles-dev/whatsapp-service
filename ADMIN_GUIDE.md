@@ -159,7 +159,14 @@ Navigate to:
 https://gateway.example.com/admin
 ```
 
-No API key is needed in the URL. On first load the page prompts for the master API key and stores it in `sessionStorage` for the duration of the browser session. The page auto-refreshes every 10 seconds.
+The dashboard now uses admin credentials and a server-side session cookie.
+
+Required env vars when the admin module is enabled:
+
+```env
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=change-me
+```
 
 ### What's shown
 
@@ -176,7 +183,7 @@ For programmatic access or external monitoring:
 
 ```http
 GET /api/admin/stats
-x-api-key: <master-key>
+Cookie: wga_admin=<session-cookie>
 ```
 
 ```json
@@ -201,7 +208,43 @@ x-api-key: <master-key>
 
 ---
 
-## 3. Managing Existing Clients
+## 3. Runtime Profiles And Modules
+
+The service can be started in a lighter or heavier mode.
+
+### Built-in profiles
+
+| Profile | Use case |
+|---|---|
+| `lite` | Minimal single-node webhook gateway |
+| `standard` | Full single-node production deployment |
+| `full` | Multi-instance deployment with leasing and owner forwarding |
+
+### Select a profile
+
+```env
+MODULE_PROFILE=standard
+```
+
+Or load a custom module file:
+
+```env
+MODULE_CONFIG_PATH=./config/modules.custom.json
+```
+
+### Module overrides
+
+Each module can be overridden individually with env vars such as:
+
+- `MODULE_ADMIN_ENABLED=false`
+- `MODULE_SCHEDULING_ENABLED=false`
+- `MODULE_OWNER_FORWARDING_ENABLED=false`
+
+See [MODULES.md](MODULES.md) for the full matrix and examples.
+
+---
+
+## 4. Managing Existing Clients
 
 ### List all devices for a client
 
@@ -252,7 +295,101 @@ x-api-key: <master-key>
 
 ---
 
-## 4. API Key Lifecycle
+## 5. Scheduled Messaging
+
+Scheduled messaging is currently available for text messages. The gateway stores the schedule in Redis and uses a delayed BullMQ job to send it at `sendAt`.
+
+### Required headers
+
+Every request needs:
+
+```http
+x-api-key: <master-key-or-client-key>
+Content-Type: application/json
+```
+
+The master key works everywhere. A client key works only under that client's `/api/clients/:clientId/...` routes.
+
+### Create a scheduled text message
+
+```http
+POST /api/clients/:clientId/devices/:deviceId/messages/schedule-text
+x-api-key: <master-or-client-key>
+Content-Type: application/json
+
+{
+  "jid": "972501234567@s.whatsapp.net",
+  "text": "Reminder: standup starts in 10 minutes.",
+  "sendAt": "2026-03-16T07:50:00.000Z",
+  "options": {
+    "quotedMessageId": "optional-message-id",
+    "mentionedJids": ["972501234567@s.whatsapp.net"]
+  }
+}
+```
+
+You may send `phone` instead of `jid`.
+
+```json
+{
+  "phone": "972501234567",
+  "text": "Reminder: standup starts in 10 minutes.",
+  "sendAt": "2026-03-16T07:50:00.000Z"
+}
+```
+
+### List scheduled messages for a device
+
+```http
+GET /api/clients/:clientId/devices/:deviceId/messages/scheduled
+GET /api/clients/:clientId/devices/:deviceId/messages/scheduled?status=SCHEDULED
+x-api-key: <master-or-client-key>
+```
+
+Allowed `status` values:
+
+- `SCHEDULED`
+- `PROCESSING`
+- `SENT`
+- `FAILED`
+- `CANCELLED`
+
+### Get one scheduled message
+
+```http
+GET /api/clients/:clientId/devices/:deviceId/messages/scheduled/:scheduleId
+x-api-key: <master-or-client-key>
+```
+
+### Cancel a scheduled message
+
+```http
+DELETE /api/clients/:clientId/devices/:deviceId/messages/scheduled/:scheduleId
+x-api-key: <master-or-client-key>
+```
+
+### Reschedule an existing scheduled message
+
+```http
+POST /api/clients/:clientId/devices/:deviceId/messages/scheduled/:scheduleId/reschedule
+x-api-key: <master-or-client-key>
+Content-Type: application/json
+
+{
+  "sendAt": "2026-03-16T08:05:00.000Z"
+}
+```
+
+### Notes
+
+- `sendAt` must be a future ISO-8601 timestamp.
+- If the device is offline when the job runs, the queue retries automatically with exponential backoff.
+- When a message is sent successfully, the record moves to `SENT` and includes `sentMessageId`.
+- Cancelling a `SENT` message is rejected.
+
+---
+
+## 6. API Key Lifecycle
 
 ### Rotate a key (replaces the existing one immediately)
 

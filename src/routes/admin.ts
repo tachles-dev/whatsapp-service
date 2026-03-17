@@ -1,16 +1,65 @@
-// routes/admin.ts — Admin dashboard: live stats page + JSON stats endpoint.
-//
-//   GET  /admin            Self-contained HTML dashboard (no API key needed in header —
-//                          the page prompts for it on first load and stores in sessionStorage)
-//   GET  /api/admin/stats  JSON stats payload (requires x-api-key header)
+// routes/admin.ts — Admin dashboard + admin session auth + audit feed.
 
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { z } from 'zod';
+import { loadConfig } from '../config';
 import { deviceManager } from '../core/device-manager';
 import { getWebhookQueue } from '../queue/index';
+import { getScheduledMessageQueue } from '../queue/scheduled';
 import { ServiceStatus } from '../types';
 import { ok } from './helpers';
+import { buildAdminSessionClearCookie, buildAdminSessionCookie, createAdminSession, isSecureRequest, parseCookies, revokeAdminSession, validateAdminCredentials } from '../admin-auth';
+import { listAuditEvents, recordAuditEvent } from '../audit-log';
+import { getLoadSnapshot } from '../load-monitor';
+
+const loginSchema = z.object({ username: z.string().min(1), password: z.string().min(1) });
+const auditQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(500).default(100) });
+
+type QueueStats = {
+  waiting: number;
+  active: number;
+  completed: number;
+  failed: number;
+  delayed: number;
+};
+
+async function getQueueStats(queue: { getWaitingCount(): Promise<number>; getActiveCount(): Promise<number>; getCompletedCount(): Promise<number>; getFailedCount(): Promise<number>; getDelayedCount(): Promise<number> }): Promise<QueueStats> {
+  const [waiting, active, completed, failed, delayed] = await Promise.all([
+    queue.getWaitingCount(),
+    queue.getActiveCount(),
+    queue.getCompletedCount(),
+    queue.getFailedCount(),
+    queue.getDelayedCount(),
+  ]);
+  return { waiting, active, completed, failed, delayed };
+}
 
 export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
+  app.post('/api/admin/login', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!loadConfig().ADMIN_USERNAME || !loadConfig().ADMIN_PASSWORD) {
+      return reply.code(503).send({ success: false, error: { code: 'SERVICE_UNAVAILABLE', message: 'Admin credentials are not configured' } });
+    }
+    const parsed = loginSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ success: false, error: { code: 'VALIDATION_ERROR', message: 'username and password are required' } });
+    if (!validateAdminCredentials(parsed.data.username, parsed.data.password)) {
+      await recordAuditEvent({ action: 'admin.login.failed', actorType: 'admin-session', actorId: parsed.data.username, ip: request.ip });
+      return reply.code(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Invalid credentials' } });
+    }
+    const token = await createAdminSession();
+    reply.header('set-cookie', buildAdminSessionCookie(token, isSecureRequest(request)));
+    await recordAuditEvent({ action: 'admin.login.succeeded', actorType: 'admin-session', actorId: parsed.data.username, ip: request.ip });
+    return ok({ authenticated: true });
+  });
+
+  app.post('/api/admin/logout', async (request: FastifyRequest, reply: FastifyReply) => {
+    const cookies = parseCookies(request.headers.cookie);
+    const cookieName = loadConfig().ADMIN_SESSION_COOKIE;
+    await revokeAdminSession(cookies[cookieName]);
+    reply.header('set-cookie', buildAdminSessionClearCookie(isSecureRequest(request)));
+    await recordAuditEvent({ action: 'admin.logout', actorType: 'admin-session', actorId: 'admin', ip: request.ip });
+    return ok({ authenticated: false });
+  });
+
   // ── JSON stats API ──────────────────────────────────────────────────────────
   app.get('/api/admin/stats', async () => {
     const allDevices = deviceManager.getAllInfos();
@@ -32,20 +81,40 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
       byClient[info.clientId].push({ deviceId: info.id, name: info.name, phone: info.phone ?? null, status });
     }
 
-    const queue = getWebhookQueue();
-    const [waiting, active, completed, failed, delayed] = await Promise.all([
-      queue.getWaitingCount(),
-      queue.getActiveCount(),
-      queue.getCompletedCount(),
-      queue.getFailedCount(),
-      queue.getDelayedCount(),
+    const config = loadConfig();
+    const [webhookQueue, scheduledQueue] = await Promise.all([
+      config.modules.webhooks ? getQueueStats(getWebhookQueue()) : Promise.resolve({ waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 }),
+      config.modules.scheduling ? getQueueStats(getScheduledMessageQueue()) : Promise.resolve({ waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 }),
     ]);
 
     return ok({
       devices: { total: allDevices.length, byStatus, byClient },
-      queue: { waiting, active, completed, failed, delayed },
+      queue: webhookQueue,
+      scheduledQueue,
       uptime: Math.floor(process.uptime()),
+      load: await getLoadSnapshot(),
       timestamp: Date.now(),
+    });
+  });
+
+  app.get('/api/admin/audit', async (request: FastifyRequest) => {
+    const parsed = auditQuerySchema.safeParse(request.query);
+    const limit = parsed.success ? parsed.data.limit : 100;
+    return ok(await listAuditEvents(limit));
+  });
+
+  app.get('/api/admin/runtime', async () => {
+    const config = loadConfig();
+    return ok({
+      instanceId: config.INSTANCE_ID,
+      profile: config.MODULE_PROFILE ?? null,
+      configPath: config.MODULE_CONFIG_PATH ?? null,
+      modules: config.modules,
+      features: {
+        adminCredentialsConfigured: !!config.ADMIN_USERNAME && !!config.ADMIN_PASSWORD,
+        ownerForwardingConfigured: !!config.INSTANCE_BASE_URL,
+        webhooksConfigured: !!config.WEBHOOK_URL && !!config.WEBHOOK_API_KEY,
+      },
     });
   });
 
@@ -146,10 +215,11 @@ const DASHBOARD_HTML = /* html */ `<!DOCTYPE html>
 <div id="login-overlay">
   <div class="login-box">
     <h2>Admin Dashboard</h2>
-    <p>Enter your API key to continue.</p>
-    <input id="key-input" type="password" placeholder="x-api-key" autocomplete="off" />
+    <p>Enter your admin credentials to continue.</p>
+    <input id="user-input" type="text" placeholder="Username" autocomplete="username" />
+    <input id="key-input" type="password" placeholder="Password" autocomplete="current-password" style="margin-top:12px" />
     <button onclick="submitKey()">Sign in</button>
-    <div class="error" id="key-error">Invalid API key — try again.</div>
+    <div class="error" id="key-error">Invalid credentials — try again.</div>
   </div>
 </div>
 
@@ -158,6 +228,7 @@ const DASHBOARD_HTML = /* html */ `<!DOCTYPE html>
   <div id="meta">
     <div id="uptime-label">Uptime: —</div>
     <div id="last-updated">Last updated: —</div>
+    <div id="load-state">Load: —</div>
   </div>
 </header>
 
@@ -185,6 +256,17 @@ const DASHBOARD_HTML = /* html */ `<!DOCTYPE html>
     </div>
   </section>
 
+  <section id="scheduled-queue-section">
+    <h2>Scheduled Queue</h2>
+    <div class="queue-grid">
+      <div class="card blue"><div class="label">Active</div><div class="value" id="sq-active">—</div></div>
+      <div class="card orange"><div class="label">Waiting</div><div class="value" id="sq-waiting">—</div></div>
+      <div class="card purple"><div class="label">Delayed</div><div class="value" id="sq-delayed">—</div></div>
+      <div class="card green"><div class="label">Completed</div><div class="value" id="sq-completed">—</div></div>
+      <div class="card red"><div class="label">Failed</div><div class="value" id="sq-failed">—</div></div>
+    </div>
+  </section>
+
   <section id="clients-section">
     <h2>Clients</h2>
     <div id="clients-list"></div>
@@ -193,20 +275,23 @@ const DASHBOARD_HTML = /* html */ `<!DOCTYPE html>
 
 <script>
   const REFRESH_INTERVAL = 5000;
-  let apiKey = sessionStorage.getItem('wga_key') || '';
   let refreshTimer = null;
   let refreshProgressTimer = null;
   let refreshStart = null;
 
-  if (apiKey) startDashboard();
+  startDashboard();
 
   function submitKey() {
-    const val = document.getElementById('key-input').value.trim();
-    if (!val) return;
-    apiKey = val;
-    fetchStats().then(ok => {
+    const username = document.getElementById('user-input').value.trim();
+    const password = document.getElementById('key-input').value.trim();
+    if (!username || !password) return;
+    fetch('/api/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    }).then(async res => {
+      const ok = res.ok;
       if (ok) {
-        sessionStorage.setItem('wga_key', apiKey);
         document.getElementById('login-overlay').style.display = 'none';
         startDashboard();
       } else {
@@ -220,9 +305,14 @@ const DASHBOARD_HTML = /* html */ `<!DOCTYPE html>
   });
 
   function startDashboard() {
-    document.getElementById('login-overlay').style.display = 'none';
-    fetchStats();
-    scheduleRefresh();
+    fetchStats().then(ok => {
+      if (ok) {
+        document.getElementById('login-overlay').style.display = 'none';
+        scheduleRefresh();
+      } else {
+        document.getElementById('login-overlay').style.display = 'flex';
+      }
+    });
   }
 
   function scheduleRefresh() {
@@ -248,9 +338,7 @@ const DASHBOARD_HTML = /* html */ `<!DOCTYPE html>
 
   async function fetchStats() {
     try {
-      const res = await fetch('/api/admin/stats', {
-        headers: { 'x-api-key': apiKey }
-      });
+      const res = await fetch('/api/admin/stats');
       if (res.status === 401) return false;
       const json = await res.json();
       renderStats(json.data);
@@ -261,7 +349,7 @@ const DASHBOARD_HTML = /* html */ `<!DOCTYPE html>
   }
 
   function renderStats(data) {
-    const { devices, queue, uptime, timestamp } = data;
+    const { devices, queue, scheduledQueue, uptime, timestamp, load } = data;
     const bs = devices.byStatus;
 
     // Device cards
@@ -279,12 +367,19 @@ const DASHBOARD_HTML = /* html */ `<!DOCTYPE html>
     document.getElementById('q-completed').textContent = queue.completed;
     document.getElementById('q-failed').textContent    = queue.failed;
 
+    document.getElementById('sq-active').textContent    = scheduledQueue?.active ?? 0;
+    document.getElementById('sq-waiting').textContent   = scheduledQueue?.waiting ?? 0;
+    document.getElementById('sq-delayed').textContent   = scheduledQueue?.delayed ?? 0;
+    document.getElementById('sq-completed').textContent = scheduledQueue?.completed ?? 0;
+    document.getElementById('sq-failed').textContent    = scheduledQueue?.failed ?? 0;
+
     // Uptime
     const h = Math.floor(uptime / 3600), m = Math.floor((uptime % 3600) / 60), s = uptime % 60;
     document.getElementById('uptime-label').textContent =
       'Uptime: ' + [h && h+'h', m && m+'m', s+'s'].filter(Boolean).join(' ');
     document.getElementById('last-updated').textContent =
       'Updated: ' + new Date(timestamp).toLocaleTimeString();
+    document.getElementById('load-state').textContent = 'Load: ' + (load?.state ?? '—');
 
     // Clients
     const container = document.getElementById('clients-list');

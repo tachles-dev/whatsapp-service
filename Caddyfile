@@ -27,7 +27,13 @@
   }
 
   # ── Reverse proxy to the app ──────────────────────────────────────────────
-  reverse_proxy app:3000
+  reverse_proxy app:3000 {
+    lb_policy least_conn
+    health_uri /api/status/ready
+    health_interval 10s
+    health_timeout 5s
+    fail_duration 30s
+  }
 
   # ── Security headers ──────────────────────────────────────────────────────
   header {

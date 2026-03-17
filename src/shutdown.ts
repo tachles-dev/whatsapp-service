@@ -4,12 +4,21 @@ import { closeRedis } from './redis';
 import { stopHeartbeat } from './heartbeat';
 import { deviceManager } from './core/device-manager';
 import { logger } from './logger';
+import { stopWebhookWorker } from './queue';
+import { stopScheduledMessageWorker } from './queue/scheduled';
+import { stopInstanceRegistry } from './instance-registry';
 
 export function setupGracefulShutdown(app: FastifyInstance): void {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Graceful shutdown initiated');
 
     stopHeartbeat();
+
+    await Promise.all([
+      stopWebhookWorker(),
+      stopScheduledMessageWorker(),
+      stopInstanceRegistry(),
+    ]);
 
     // Flush caches and close all device connections
     await deviceManager.shutdownAll();

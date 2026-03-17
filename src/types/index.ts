@@ -115,6 +115,37 @@ export interface SentMessage {
   timestamp: number;
 }
 
+export enum ScheduledMessageStatus {
+  SCHEDULED = 'SCHEDULED',
+  PROCESSING = 'PROCESSING',
+  SENT = 'SENT',
+  FAILED = 'FAILED',
+  CANCELLED = 'CANCELLED',
+}
+
+export interface ScheduledTextMessagePayload {
+  text: string;
+  options?: SendOptions;
+}
+
+export interface ScheduledTextMessage {
+  id: string;
+  clientId: string;
+  deviceId: string;
+  targetJid: string;
+  messageType: 'text';
+  payload: ScheduledTextMessagePayload;
+  status: ScheduledMessageStatus;
+  sendAt: number;
+  createdAt: number;
+  updatedAt: number;
+  sentAt: number | null;
+  cancelledAt: number | null;
+  sentMessageId: string | null;
+  lastError: string | null;
+  attemptCount: number;
+}
+
 export interface LocationPayload {
   degreesLatitude: number;
   degreesLongitude: number;
@@ -224,6 +255,10 @@ export interface DeviceStatusData {
   connectedAt: number | null;
   lastDisconnect: number | null;
   qr: string | null;
+  ownerInstanceId?: string;
+  reconnectAttempts?: number;
+  nextReconnectAt?: number | null;
+  recovering?: boolean;
 }
 
 // ── Webhook Events ────────────────────────────────────────────────────────

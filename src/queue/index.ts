@@ -14,6 +14,7 @@ interface WebhookJobPayload {
 const QUEUE_NAME = 'webhook-delivery';
 
 let webhookQueue: Queue<WebhookJobPayload> | null = null;
+let webhookWorker: Worker<WebhookJobPayload> | null = null;
 
 function getRedisOpts() {
   return { connection: { url: loadConfig().REDIS_URL, maxRetriesPerRequest: null } };
@@ -32,6 +33,9 @@ function getEventId(event: WebhookEvent): string {
 }
 
 export function getWebhookQueue(): Queue<WebhookJobPayload> {
+  if (!loadConfig().modules.webhooks) {
+    throw new Error('Webhook module is disabled');
+  }
   if (webhookQueue) return webhookQueue;
 
   webhookQueue = new Queue<WebhookJobPayload>(QUEUE_NAME, {
@@ -48,6 +52,8 @@ export function getWebhookQueue(): Queue<WebhookJobPayload> {
 }
 
 export function startWebhookWorker(): Worker {
+  if (webhookWorker) return webhookWorker;
+
   const worker = new Worker<WebhookJobPayload>(
     QUEUE_NAME,
     async (job: Job<WebhookJobPayload>) => {
@@ -77,10 +83,23 @@ export function startWebhookWorker(): Worker {
     logger.error({ eventId: event ? getEventId(event) : 'unknown', type: event?.type, err: err.message }, 'Webhook delivery failed');
   });
 
+  webhookWorker = worker;
   return worker;
 }
 
+export async function stopWebhookWorker(): Promise<void> {
+  if (webhookWorker) {
+    await webhookWorker.close();
+    webhookWorker = null;
+  }
+  if (webhookQueue) {
+    await webhookQueue.close();
+    webhookQueue = null;
+  }
+}
+
 export async function enqueueWebhookEvent(clientId: string, event: WebhookEvent): Promise<void> {
+  if (!loadConfig().modules.webhooks) return;
   const queue = getWebhookQueue();
   // Deduplicate messages by their WhatsApp message ID; give reactions/receipts unique IDs.
   let jobId: string | undefined;

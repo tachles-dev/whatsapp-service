@@ -20,6 +20,11 @@ import { z } from 'zod';
 import { deviceManager } from '../core/device-manager';
 import { logger } from '../logger';
 import { ok, fail, sendError, jidPattern, phonePattern, isBlockedMediaUrl, validateJid } from './helpers';
+import { scheduledMessageService } from '../services/scheduled-messages';
+import { ScheduledMessageStatus } from '../types';
+import { consumeSendQuota, getBroadcastConcurrency } from '../send-throttle';
+import { recordAuditEvent } from '../audit-log';
+import { loadConfig } from '../config';
 
 type DeviceParams = { clientId: string; deviceId: string };
 type MessageParams = DeviceParams & { messageId: string };
@@ -89,6 +94,20 @@ const broadcastSchema = z.object({
   text: z.string().min(1).max(10_000),
 });
 
+const scheduleTextSchema = jidOrPhone.and(z.object({
+  text: z.string().min(1).max(10_000),
+  sendAt: z.coerce.date(),
+  options: sendOptions,
+}));
+
+const rescheduleSchema = z.object({
+  sendAt: z.coerce.date(),
+});
+
+const scheduledListQuerySchema = z.object({
+  status: z.nativeEnum(ScheduledMessageStatus).optional(),
+});
+
 // Legacy schema kept for backward compatibility with existing integrations
 const legacySendSchema = jidOrPhone.and(z.object({
   text: z.string().min(1).max(10_000),
@@ -97,6 +116,23 @@ const legacySendSchema = jidOrPhone.and(z.object({
 
 function resolveJid(data: { jid?: string; phone?: string }): string {
   return data.jid ?? `${data.phone}@s.whatsapp.net`;
+}
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+
+  async function run(): Promise<void> {
+    while (true) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= items.length) return;
+      results[index] = await worker(items[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => run()));
+  return results;
 }
 
 export async function registerMessageRoutes(app: FastifyInstance): Promise<void> {
@@ -108,6 +144,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
     const parsed = sendTextSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
     try {
+      await consumeSendQuota(clientId, deviceId);
       const manager = deviceManager.assertManager(clientId, deviceId);
       const result = await manager.sendTextMessage(resolveJid(parsed.data), parsed.data.text, parsed.data.options ?? undefined);
       return ok(result);
@@ -120,6 +157,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
     const parsed = sendImageSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
     try {
+      await consumeSendQuota(clientId, deviceId);
       const manager = deviceManager.assertManager(clientId, deviceId);
       const result = await manager.sendImageMessage(resolveJid(parsed.data), parsed.data.media, {
         caption: parsed.data.caption,
@@ -135,6 +173,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
     const parsed = sendVideoSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
     try {
+      await consumeSendQuota(clientId, deviceId);
       const manager = deviceManager.assertManager(clientId, deviceId);
       const result = await manager.sendVideoMessage(resolveJid(parsed.data), parsed.data.media, {
         caption: parsed.data.caption,
@@ -150,6 +189,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
     const parsed = sendAudioSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
     try {
+      await consumeSendQuota(clientId, deviceId);
       const manager = deviceManager.assertManager(clientId, deviceId);
       const result = await manager.sendAudioMessage(resolveJid(parsed.data), parsed.data.media, {
         ptt: parsed.data.ptt,
@@ -165,6 +205,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
     const parsed = sendDocumentSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
     try {
+      await consumeSendQuota(clientId, deviceId);
       const manager = deviceManager.assertManager(clientId, deviceId);
       const result = await manager.sendDocumentMessage(resolveJid(parsed.data), parsed.data.media, {
         fileName: parsed.data.fileName,
@@ -181,6 +222,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
     const parsed = sendLocationSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
     try {
+      await consumeSendQuota(clientId, deviceId);
       const manager = deviceManager.assertManager(clientId, deviceId);
       const result = await manager.sendLocationMessage(resolveJid(parsed.data), {
         degreesLatitude: parsed.data.latitude,
@@ -198,6 +240,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
     const parsed = sendReactionSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
     try {
+      await consumeSendQuota(clientId, deviceId);
       const manager = deviceManager.assertManager(clientId, deviceId);
       await manager.sendReactionMessage(resolveJid(parsed.data), parsed.data.targetMessageId, parsed.data.emoji);
       return ok({ sent: true });
@@ -230,18 +273,87 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
-      const results = await Promise.allSettled(
-        parsed.data.jids.map((jid) => manager.sendTextMessage(jid, parsed.data.text)),
-      );
-      const response = parsed.data.jids.map((jid, i) => {
-        const r = results[i];
-        if (r.status === 'fulfilled') return { jid, success: true, messageId: r.value.messageId };
-        logger.warn({ deviceId, jid, err: r.reason?.message }, 'Broadcast partial failure');
-        return { jid, success: false, error: r.reason?.message ?? 'unknown' };
+      const settled = await mapWithConcurrency(parsed.data.jids, getBroadcastConcurrency(), async (jid) => {
+        try {
+          await consumeSendQuota(clientId, deviceId);
+          const sent = await manager.sendTextMessage(jid, parsed.data.text);
+          return { jid, success: true, messageId: sent.messageId };
+        } catch (err) {
+          logger.warn({ deviceId, jid, err: err instanceof Error ? err.message : String(err) }, 'Broadcast partial failure');
+          return { jid, success: false, error: err instanceof Error ? err.message : 'unknown' };
+        }
       });
+      await recordAuditEvent({ action: 'messages.broadcast', actorType: 'client-key', actorId: clientId, ip: request.ip, clientId, deviceId, metadata: { recipients: parsed.data.jids.length } });
+      const response = settled;
       return ok(response);
     } catch (err) { sendError(err, reply); }
   });
+
+  if (loadConfig().modules.scheduling) {
+    // POST .../messages/schedule-text
+    app.post('/api/clients/:clientId/devices/:deviceId/messages/schedule-text', async (request: FastifyRequest, reply) => {
+    const { clientId, deviceId } = request.params as DeviceParams;
+    const parsed = scheduleTextSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
+    try {
+      const scheduled = await scheduledMessageService.createScheduledTextMessage({
+        clientId,
+        deviceId,
+        targetJid: resolveJid(parsed.data),
+        text: parsed.data.text,
+        sendAt: parsed.data.sendAt.getTime(),
+        options: parsed.data.options ?? undefined,
+      });
+      await recordAuditEvent({ action: 'messages.scheduled', actorType: 'client-key', actorId: clientId, ip: request.ip, clientId, deviceId, metadata: { sendAt: scheduled.sendAt } });
+      return reply.code(201).send(ok(scheduled));
+    } catch (err) { sendError(err, reply); }
+    });
+
+    // GET .../messages/scheduled
+    app.get('/api/clients/:clientId/devices/:deviceId/messages/scheduled', async (request: FastifyRequest, reply) => {
+    const { clientId, deviceId } = request.params as DeviceParams;
+    const parsed = scheduledListQuerySchema.safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
+    try {
+      const scheduled = await scheduledMessageService.listScheduledMessages(clientId, deviceId, parsed.data.status);
+      return ok(scheduled);
+    } catch (err) { sendError(err, reply); }
+    });
+
+    // GET .../messages/scheduled/:scheduleId
+    app.get('/api/clients/:clientId/devices/:deviceId/messages/scheduled/:scheduleId', async (request: FastifyRequest, reply) => {
+    const { clientId, deviceId, scheduleId } = request.params as DeviceParams & { scheduleId: string };
+    try {
+      const scheduled = await scheduledMessageService.getScheduledMessage(clientId, deviceId, scheduleId);
+      return ok(scheduled);
+    } catch (err) { sendError(err, reply); }
+    });
+
+    // DELETE .../messages/scheduled/:scheduleId
+    app.delete('/api/clients/:clientId/devices/:deviceId/messages/scheduled/:scheduleId', async (request: FastifyRequest, reply) => {
+    const { clientId, deviceId, scheduleId } = request.params as DeviceParams & { scheduleId: string };
+    try {
+      const scheduled = await scheduledMessageService.cancelScheduledMessage(clientId, deviceId, scheduleId);
+      return ok(scheduled);
+    } catch (err) { sendError(err, reply); }
+    });
+
+    // POST .../messages/scheduled/:scheduleId/reschedule
+    app.post('/api/clients/:clientId/devices/:deviceId/messages/scheduled/:scheduleId/reschedule', async (request: FastifyRequest, reply) => {
+    const { clientId, deviceId, scheduleId } = request.params as DeviceParams & { scheduleId: string };
+    const parsed = rescheduleSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
+    try {
+      const scheduled = await scheduledMessageService.rescheduleScheduledMessage({
+        clientId,
+        deviceId,
+        scheduleId,
+        sendAt: parsed.data.sendAt.getTime(),
+      });
+      return ok(scheduled);
+    } catch (err) { sendError(err, reply); }
+    });
+  }
 
   // ── Backward compat: legacy /send endpoint ─────────────────────────────────
 
@@ -250,6 +362,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
     const parsed = legacySendSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
     try {
+      await consumeSendQuota(clientId, deviceId);
       const manager = deviceManager.assertManager(clientId, deviceId);
       const msgId = await manager.sendMessage(resolveJid(parsed.data), parsed.data.text, (parsed.data as any).quotedId);
       return ok({ msgId });

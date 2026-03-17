@@ -12,6 +12,10 @@ import { registerChatRoutes } from './chats';
 import { registerGroupRoutes } from './groups';
 import { registerAccessRoutes } from './access';
 import { registerAdminRoutes } from './admin';
+import { getLoadSnapshot } from '../load-monitor';
+import { isValidAdminSession } from '../admin-auth';
+import { deviceManager } from '../core/device-manager';
+import { resolveInstanceBaseUrl } from '../instance-registry';
 
 // ── In-process rate limiter (sliding window per IP) ─────────────────────────────────
 const RATE_LIMIT_MAX = 30;
@@ -45,12 +49,84 @@ function checkRateLimit(ip: string): { allowed: boolean; remaining: number } {
   return { allowed: true, remaining: RATE_LIMIT_MAX - timestamps.length };
 }
 
+export async function maybeForwardDeviceRequest(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
+  const config = loadConfig();
+  if (!config.modules.ownerForwarding) return false;
+  if (request.headers['x-wga-forwarded'] === '1') return false;
+
+  const params = request.params as { clientId?: string; deviceId?: string };
+  const clientId = params?.clientId;
+  const deviceId = params?.deviceId;
+  if (!clientId || !deviceId) return false;
+  const info = deviceManager.getInfo(deviceId);
+  if (!info || info.clientId !== clientId) return false;
+  if (deviceManager.isOwnedLocally(deviceId)) return false;
+
+  const ownerInstanceId = await deviceManager.getOwnerInstanceId(deviceId);
+  if (!ownerInstanceId || ownerInstanceId === config.INSTANCE_ID) return false;
+  const ownerBaseUrl = await resolveInstanceBaseUrl(ownerInstanceId);
+  if (!ownerBaseUrl) {
+    reply.code(503).send(fail('SERVICE_UNAVAILABLE', `Device ${deviceId} is owned by ${ownerInstanceId} but its instance endpoint is unavailable`));
+    return true;
+  }
+
+  const url = new URL(request.raw.url || request.url, ownerBaseUrl).toString();
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(request.headers)) {
+    if (!value) continue;
+    if (['host', 'content-length', 'connection'].includes(key.toLowerCase())) continue;
+    if (Array.isArray(value)) {
+      for (const item of value) headers.append(key, item);
+    } else {
+      headers.set(key, value);
+    }
+  }
+  headers.set('x-wga-forwarded', '1');
+  headers.set('x-wga-forwarded-by', config.INSTANCE_ID);
+
+  const body = request.body === undefined
+    ? undefined
+    : typeof request.body === 'string'
+      ? request.body
+      : JSON.stringify(request.body);
+
+  try {
+    const upstream = await fetch(url, {
+      method: request.method,
+      headers,
+      body: ['GET', 'HEAD'].includes(request.method) ? undefined : body,
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    const contentType = upstream.headers.get('content-type');
+    if (contentType) reply.header('content-type', contentType);
+    reply.header('x-forwarded-to-instance', ownerInstanceId);
+    reply.code(upstream.status);
+    const text = await upstream.text();
+    if (contentType?.includes('application/json')) {
+      try {
+        reply.send(JSON.parse(text));
+      } catch {
+        reply.send({ success: false, error: { code: 'BAD_UPSTREAM_RESPONSE', message: 'Owning instance returned invalid JSON' } });
+      }
+    } else {
+      reply.send(text);
+    }
+    return true;
+  } catch (err) {
+    logger.error({ err, deviceId, ownerInstanceId, url }, 'Failed to forward request to owning instance');
+    reply.code(503).send(fail('SERVICE_UNAVAILABLE', `Owning instance ${ownerInstanceId} is unavailable`));
+    return true;
+  }
+}
+
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   const config = loadConfig();
 
   // ── Global auth guard ────────────────────────────────────────────────────
   // Rate limit + auth: runs on every request.
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
+    reply.header('x-instance-id', config.INSTANCE_ID);
     // Rate limit check (before auth, before everything)
     const clientIp = request.ip;
     const { allowed, remaining } = checkRateLimit(clientIp);
@@ -64,11 +140,21 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
     // Public endpoints — no auth required
     if (request.url === '/api/status') return;
+    if (request.url === '/api/status/live') return;
+    if (request.url === '/api/status/ready') return;
+    if (request.url === '/api/admin/login') return;
     if (request.url === '/') return;
-    if (request.url === '/admin') return;  // Static shell — no data; prompts for key in-browser
+    if (request.url === '/admin' && config.modules.admin) return;
 
     const masterKey = config.API_KEY;
     const providedKey = request.headers['x-api-key'] as string | undefined;
+
+    if (request.url.startsWith('/api/admin/')) {
+      if (providedKey === masterKey) return;
+      if (await isValidAdminSession(request)) return;
+      reply.code(401).send(fail('UNAUTHORIZED', 'Invalid admin session'));
+      return;
+    }
 
     // Master key: unrestricted access
     if (providedKey === masterKey) return;
@@ -84,8 +170,28 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     reply.code(401).send(fail('UNAUTHORIZED', 'Invalid or missing API key'));
   });
 
+  app.addHook('preHandler', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!request.url.startsWith('/api/clients/')) return;
+    if (!request.url.includes('/devices/')) return;
+    if (reply.sent) return;
+    await maybeForwardDeviceRequest(request, reply);
+  });
+
   // ── Public pages (no auth) ───────────────────────────────────────────────
-  app.get('/api/status', async () => ok({ status: 'ok', timestamp: Date.now() }));
+  app.get('/api/status', async () => {
+    const snapshot = await getLoadSnapshot();
+    return ok(snapshot);
+  });
+
+  app.get('/api/status/live', async () => ok({ live: true, timestamp: Date.now() }));
+
+  app.get('/api/status/ready', async (_request, reply) => {
+    const snapshot = await getLoadSnapshot();
+    if (!snapshot.ready) {
+      return reply.code(503).send(fail('SERVICE_UNAVAILABLE', `Service not ready: ${snapshot.reasons.join(', ') || 'overloaded'}`));
+    }
+    return ok(snapshot);
+  });
 
   app.get('/', async (_request, reply) => {
     reply.type('text/html').send(DOCS_HTML);
@@ -99,7 +205,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await registerChatRoutes(app);
   await registerGroupRoutes(app);
   await registerAccessRoutes(app);
-  await registerAdminRoutes(app);
+  if (config.modules.admin) {
+    await registerAdminRoutes(app);
+  }
 }
 
 // ── API reference page ───────────────────────────────────────────────────────
@@ -691,6 +799,71 @@ x-ratelimit-remaining: 24</pre>
   { "jid": "972501234567@s.whatsapp.net", "messageId": "3EB0…" },
   { "jid": "972509999999@s.whatsapp.net", "error": "not on WhatsApp" }
 ]</pre>
+      </div>
+    </details>
+  </div>
+  <div class="ep">
+    <details>
+      <summary><span class="m POST">POST</span><span class="ep-path">/schedule-text</span><span class="ep-note">Schedule a text message</span></summary>
+      <div class="ep-body">
+        <div class="ep-lbl">Body</div>
+        <table>
+          <tr><th>Field</th><th>Type</th><th></th><th>Description</th></tr>
+          <tr><td class="f">jid / phone</td><td class="t">string</td><td class="req">req</td><td>Recipient (one required)</td></tr>
+          <tr><td class="f">text</td><td class="t">string</td><td class="req">req</td><td>1&ndash;10,000 chars</td></tr>
+          <tr><td class="f">sendAt</td><td class="t">string</td><td class="req">req</td><td>Future ISO-8601 timestamp in UTC</td></tr>
+          <tr><td class="f">options</td><td class="t">object</td><td class="opt">opt</td><td>quotedMessageId, mentionedJids</td></tr>
+        </table>
+        <div class="ep-lbl">Example request</div>
+        <pre>POST /api/clients/acme/devices/my-phone/messages/schedule-text
+{ "phone": "972501234567", "text": "Reminder in 10 minutes", "sendAt": "2026-03-16T07:50:00.000Z" }</pre>
+        <div class="ep-lbl">Response</div>
+        <pre>{ "id": "e7c2...", "status": "SCHEDULED", "sendAt": 1773647400000 }</pre>
+      </div>
+    </details>
+  </div>
+  <div class="ep">
+    <details>
+      <summary><span class="m GET">GET</span><span class="ep-path">/scheduled</span><span class="ep-note">List scheduled messages</span></summary>
+      <div class="ep-body">
+        <p>Returns all scheduled-message records for the device, ordered by <code>sendAt</code>.</p>
+        <div class="ep-lbl">Query params</div>
+        <table>
+          <tr><th>Field</th><th>Type</th><th></th><th>Description</th></tr>
+          <tr><td class="f">status</td><td class="t">string</td><td class="opt">opt</td><td>Filter by <code>SCHEDULED</code>, <code>PROCESSING</code>, <code>SENT</code>, <code>FAILED</code>, or <code>CANCELLED</code></td></tr>
+        </table>
+      </div>
+    </details>
+  </div>
+  <div class="ep">
+    <details>
+      <summary><span class="m GET">GET</span><span class="ep-path">/scheduled/:scheduleId</span><span class="ep-note">Get one scheduled message</span></summary>
+      <div class="ep-body">
+        <p>Loads a single scheduled-message record, including status, timestamps, and the eventual <code>sentMessageId</code>.</p>
+      </div>
+    </details>
+  </div>
+  <div class="ep">
+    <details>
+      <summary><span class="m DELETE">DELETE</span><span class="ep-path">/scheduled/:scheduleId</span><span class="ep-note">Cancel a scheduled message</span></summary>
+      <div class="ep-body">
+        <p>Cancels a pending scheduled message. Sent messages cannot be cancelled.</p>
+        <div class="ep-lbl">Response</div><pre>{ "id": "e7c2...", "status": "CANCELLED", "cancelledAt": 1773643800000 }</pre>
+      </div>
+    </details>
+  </div>
+  <div class="ep">
+    <details>
+      <summary><span class="m POST">POST</span><span class="ep-path">/scheduled/:scheduleId/reschedule</span><span class="ep-note">Reschedule an existing message</span></summary>
+      <div class="ep-body">
+        <div class="ep-lbl">Body</div>
+        <table>
+          <tr><th>Field</th><th>Type</th><th></th><th>Description</th></tr>
+          <tr><td class="f">sendAt</td><td class="t">string</td><td class="req">req</td><td>New future ISO-8601 timestamp in UTC</td></tr>
+        </table>
+        <div class="ep-lbl">Example request</div>
+        <pre>POST /api/clients/acme/devices/my-phone/messages/scheduled/e7c2/reschedule
+{ "sendAt": "2026-03-16T08:05:00.000Z" }</pre>
       </div>
     </details>
   </div>

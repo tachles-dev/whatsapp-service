@@ -10,6 +10,7 @@ import { loadConfig } from '../config';
 import { logger } from '../logger';
 import { clientConfigManager, ClientConfigPatch, generateClientKey, revokeClientKey, rotateClientKey, safeConfig } from '../core/client-config';
 import { ok, fail } from './helpers';
+import { recordAuditEvent } from '../audit-log';
 
 const clientConfigSchema = z.object({
   webhookUrl: z.string().url().nullable().optional(),
@@ -53,6 +54,14 @@ export async function registerConfigRoutes(app: FastifyInstance): Promise<void> 
         .send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
     }
     const updated = await clientConfigManager.setConfig(clientId, parsed.data as ClientConfigPatch);
+    await recordAuditEvent({
+      action: 'client.config.updated',
+      actorType: 'master-key',
+      actorId: 'master',
+      ip: request.ip,
+      clientId,
+      metadata: { fields: Object.keys(parsed.data) },
+    });
     return ok(safeConfig(updated));
   });
 
@@ -60,6 +69,7 @@ export async function registerConfigRoutes(app: FastifyInstance): Promise<void> 
   app.delete('/api/clients/:clientId/config', async (request: FastifyRequest) => {
     const { clientId } = request.params as { clientId: string };
     await clientConfigManager.resetConfig(clientId);
+    await recordAuditEvent({ action: 'client.config.reset', actorType: 'master-key', actorId: 'master', ip: request.ip, clientId });
     return ok({ reset: true });
   });
 
@@ -72,6 +82,7 @@ export async function registerConfigRoutes(app: FastifyInstance): Promise<void> 
     const { ttlDays = 90 } = (request.body as { ttlDays?: number }) ?? {};
     const plaintext = await generateClientKey(clientId, ttlDays);
     logger.info({ clientId, ttlDays }, 'Client API key created');
+    await recordAuditEvent({ action: 'client.key.created', actorType: 'master-key', actorId: 'master', ip: request.ip, clientId, metadata: { ttlDays } });
     return reply.code(201).send(ok({
       key: plaintext,
       warning: 'Store this key securely. It will never be shown again.',
@@ -92,6 +103,7 @@ export async function registerConfigRoutes(app: FastifyInstance): Promise<void> 
     if (provided === loadConfig().API_KEY) {
       const plaintext = await generateClientKey(clientId, ttlDays);
       logger.info({ clientId, ttlDays }, 'Client API key rotated (master key)');
+      await recordAuditEvent({ action: 'client.key.rotated', actorType: 'master-key', actorId: 'master', ip: request.ip, clientId, metadata: { ttlDays } });
       return reply.code(201).send(ok({
         key: plaintext,
         warning: 'Store this key securely. It will never be shown again.',
@@ -105,6 +117,7 @@ export async function registerConfigRoutes(app: FastifyInstance): Promise<void> 
       return reply.code(401).send(fail('UNAUTHORIZED', 'Key invalid or expired — use master key to re-issue'));
     }
     logger.info({ clientId }, 'Client API key rotated (client key)');
+    await recordAuditEvent({ action: 'client.key.rotated', actorType: 'client-key', actorId: clientId, ip: request.ip, clientId, metadata: { ttlDays } });
     return reply.code(201).send(ok({
       key: plaintext,
       warning: 'Store this key securely. It will never be shown again.',
@@ -117,6 +130,7 @@ export async function registerConfigRoutes(app: FastifyInstance): Promise<void> 
     const { clientId } = request.params as { clientId: string };
     await revokeClientKey(clientId);
     logger.info({ clientId }, 'Client API key revoked');
+    await recordAuditEvent({ action: 'client.key.revoked', actorType: 'master-key', actorId: 'master', ip: request.ip, clientId });
     return ok({ revoked: true });
   });
 }

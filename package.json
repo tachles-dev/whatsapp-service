@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsx watch src/index.ts"
+    "dev": "tsx watch src/index.ts",
+    "test": "cross-env WGA_IN_MEMORY_REDIS=1 tsx --test tests/**/*.test.ts"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -24,6 +25,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.13.4",
+    "cross-env": "^10.1.0",
     "tsx": "^4.19.3",
     "typescript": "^5.7.3"
   }

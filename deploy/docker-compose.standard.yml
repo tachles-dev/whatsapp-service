@@ -1,0 +1,9 @@
+services:
+  app:
+    env_file: .env
+    environment:
+      MODULE_PROFILE: standard
+
+  caddy:
+    environment:
+      DOMAIN: ${DOMAIN}

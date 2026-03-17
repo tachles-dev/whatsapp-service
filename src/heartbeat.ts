@@ -10,6 +10,9 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
  */
 export function startHeartbeat(): void {
   const config = loadConfig();
+  if (!config.modules.heartbeat || !config.WEBHOOK_URL || !config.WEBHOOK_API_KEY) return;
+  const webhookUrl = config.WEBHOOK_URL;
+  const webhookApiKey = config.WEBHOOK_API_KEY;
 
   heartbeatTimer = setInterval(async () => {
     const allInfos = deviceManager.getAllInfos();
@@ -30,11 +33,11 @@ export function startHeartbeat(): void {
           'Heartbeat',
         );
 
-        const res = await fetch(config.WEBHOOK_URL, {
+        const res = await fetch(webhookUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-api-key': config.WEBHOOK_API_KEY,
+            'x-api-key': webhookApiKey,
           },
           body: JSON.stringify({ type: 'heartbeat', ...statusData }),
           signal: AbortSignal.timeout(5000),

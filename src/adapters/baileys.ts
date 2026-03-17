@@ -56,8 +56,11 @@ export class BaileysAdapter implements IWhatsAppAdapter {
   private lastDisconnect: number | null = null;
   private startTime = Date.now();
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 10;
+  private maxReconnectAttempts = loadConfig().RECONNECT_MAX_ATTEMPTS;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
+  private nextReconnectAt: number | null = null;
+  private startPromise: Promise<void> | null = null;
+  private autoReconnectEnabled = true;
   private phoneVerifier: ((phone: string) => Promise<boolean>) | null = null;
   // Resolves when the first contacts.upsert or messaging-history.set fires after connecting.
   // getChats() awaits this to avoid a race between the caller and the async contact sync.
@@ -111,10 +114,13 @@ export class BaileysAdapter implements IWhatsAppAdapter {
   }
 
   private scheduleRestart(delayMs: number): void {
+    if (!this.autoReconnectEnabled) return;
     if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.nextReconnectAt = Date.now() + delayMs;
     this.restartTimer = setTimeout(() => {
       this.restartTimer = null;
-      this.start();
+      this.nextReconnectAt = null;
+      void this.start();
     }, delayMs);
   }
 
@@ -154,14 +160,30 @@ export class BaileysAdapter implements IWhatsAppAdapter {
       connectedAt: this.connectedAt,
       lastDisconnect: this.lastDisconnect,
       qr: this.status === ServiceStatus.CONNECTED ? null : this.qrCode,
+      ownerInstanceId: loadConfig().INSTANCE_ID,
+      reconnectAttempts: this.reconnectAttempts,
+      nextReconnectAt: this.nextReconnectAt,
+      recovering: this.status !== ServiceStatus.CONNECTED && (this.startPromise !== null || this.restartTimer !== null),
     };
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   async start(): Promise<void> {
+    if (this.startPromise) return this.startPromise;
+    this.autoReconnectEnabled = true;
+    this.startPromise = this.startInternal();
+    try {
+      await this.startPromise;
+    } finally {
+      this.startPromise = null;
+    }
+  }
+
+  private async startInternal(): Promise<void> {
     logger.info({ deviceId: this.deviceId, reconnectAttempts: this.reconnectAttempts }, 'start() called');
     this.cleanupSocket();
+    this.status = ServiceStatus.INITIALIZING;
 
     const config = loadConfig();
     const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
@@ -444,6 +466,7 @@ export class BaileysAdapter implements IWhatsAppAdapter {
       if (loggedOut) {
         logger.warn({ deviceId: this.deviceId }, 'Session logged out — clearing auth and restarting for new QR');
         if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
+        this.nextReconnectAt = null;
         this.cleanupSocket();
         try {
           const files = await fs.readdir(this.authDir);
@@ -455,7 +478,7 @@ export class BaileysAdapter implements IWhatsAppAdapter {
       }
 
       if (this.reconnectAttempts < this.maxReconnectAttempts) {
-        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 60_000);
+        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), loadConfig().RECONNECT_MAX_DELAY_MS);
         this.reconnectAttempts++;
         logger.info({ deviceId: this.deviceId, attempt: this.reconnectAttempts, maxAttempts: this.maxReconnectAttempts, delayMs: delay }, 'Reconnecting...');
         this.scheduleRestart(delay);
@@ -463,7 +486,7 @@ export class BaileysAdapter implements IWhatsAppAdapter {
         logger.error({ deviceId: this.deviceId }, 'Max reconnect attempts reached — entering ERROR state, will retry in 5 minutes');
         this.status = ServiceStatus.ERROR;
         this.reconnectAttempts = 0;
-        this.scheduleRestart(5 * 60 * 1000);
+        this.scheduleRestart(loadConfig().RECONNECT_ERROR_COOLDOWN_MS);
       }
     }
 
@@ -483,6 +506,7 @@ export class BaileysAdapter implements IWhatsAppAdapter {
       this.status = ServiceStatus.CONNECTED;
       this.connectedAt = Date.now();
       this.reconnectAttempts = 0;
+      this.nextReconnectAt = null;
       this.qrCode = null;
       logger.info({ deviceId: this.deviceId, phone }, 'WhatsApp connected');
     }
@@ -996,7 +1020,9 @@ export class BaileysAdapter implements IWhatsAppAdapter {
 
   async resetAuth(): Promise<void> {
     logger.warn({ deviceId: this.deviceId }, 'Auth reset requested');
+    this.autoReconnectEnabled = true;
     if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
+    this.nextReconnectAt = null;
     this.cleanupSocket();
     try {
       const files = await fs.readdir(this.authDir);
@@ -1010,7 +1036,9 @@ export class BaileysAdapter implements IWhatsAppAdapter {
   }
 
   async close(): Promise<void> {
+    this.autoReconnectEnabled = false;
     if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
+    this.nextReconnectAt = null;
     this.cleanupSocket();
     this.status = ServiceStatus.DISCONNECTED;
     logger.info({ deviceId: this.deviceId }, 'Connection closed gracefully');

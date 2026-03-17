@@ -3,11 +3,12 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { BaileysAdapter } from '../adapters/baileys';
 import { DeviceCache } from './cache';
-import { DeviceInfo, IWhatsAppAdapter } from '../types';
+import { DeviceInfo, ErrorCode, IWhatsAppAdapter } from '../types';
 import { getRedis } from '../redis';
 import { loadConfig } from '../config';
 import { logger } from '../logger';
 import { clientConfigManager } from './client-config';
+import { AppError } from '../errors';
 
 const MAX_DEVICES_PER_CLIENT = 5;
 void MAX_DEVICES_PER_CLIENT; // used via clientConfig.maxDevices
@@ -20,6 +21,10 @@ class DeviceManager {
   private managers = new Map<string, IWhatsAppAdapter>();
   private caches = new Map<string, DeviceCache>();
   private infos = new Map<string, StoredDeviceInfo>();
+  private clientDeviceIds = new Map<string, Set<string>>();
+  private ownedDeviceIds = new Set<string>();
+  private leaseRenewTimer: ReturnType<typeof setInterval> | null = null;
+  private leaseReconcileTimer: ReturnType<typeof setInterval> | null = null;
 
   // ── Redis key helpers ──────────────────────────────────────────────────────
 
@@ -31,12 +36,173 @@ class DeviceManager {
     return `wa:client:${clientId}:devices`;
   }
 
+  private allDevicesKey(): string {
+    return 'wa:devices';
+  }
+
+  private deviceLeaseKey(deviceId: string): string {
+    return `wa:device:${deviceId}:lease`;
+  }
+
+  private clientsKey(): string {
+    return 'wa:clients';
+  }
+
   private bannedKey(clientId: string): string {
     return `wa:client:${clientId}:banned`;
   }
 
   private allowedKey(clientId: string): string {
     return `wa:client:${clientId}:allowed`;
+  }
+
+  private trackClientDevice(clientId: string, deviceId: string): void {
+    const existing = this.clientDeviceIds.get(clientId);
+    if (existing) {
+      existing.add(deviceId);
+      return;
+    }
+    this.clientDeviceIds.set(clientId, new Set([deviceId]));
+  }
+
+  private untrackClientDevice(clientId: string, deviceId: string): void {
+    const existing = this.clientDeviceIds.get(clientId);
+    if (!existing) return;
+    existing.delete(deviceId);
+    if (existing.size === 0) this.clientDeviceIds.delete(clientId);
+  }
+
+  private async claimLease(deviceId: string): Promise<boolean> {
+    if (!loadConfig().modules.multiInstanceLeasing) return true;
+    const redis = getRedis();
+    const config = loadConfig();
+    const currentOwner = await redis.get(this.deviceLeaseKey(deviceId));
+    if (currentOwner === config.INSTANCE_ID) {
+      await redis.pexpire(this.deviceLeaseKey(deviceId), config.DEVICE_LEASE_TTL_MS);
+      return true;
+    }
+    const claimed = await redis.set(this.deviceLeaseKey(deviceId), config.INSTANCE_ID, 'PX', config.DEVICE_LEASE_TTL_MS, 'NX');
+    return claimed === 'OK';
+  }
+
+  private async releaseLease(deviceId: string): Promise<void> {
+    if (!loadConfig().modules.multiInstanceLeasing) return;
+    const redis = getRedis();
+    const key = this.deviceLeaseKey(deviceId);
+    const config = loadConfig();
+    const currentOwner = await redis.get(key);
+    if (currentOwner === config.INSTANCE_ID) {
+      await redis.del(key);
+    }
+  }
+
+  private async ensureLocalDevice(info: StoredDeviceInfo): Promise<IWhatsAppAdapter> {
+    const existing = this.managers.get(info.id);
+    if (existing) return existing;
+
+    const config = loadConfig();
+    const authDir = path.join(config.AUTH_BASE_DIR, info.id);
+    await fs.mkdir(authDir, { recursive: true });
+
+    const cache = new DeviceCache(info.id);
+    await cache.loadFromRedis();
+
+    const manager = new BaileysAdapter(info.id, info.clientId, authDir, cache);
+    this.attachPhoneVerifier(manager, info.clientId, info.id);
+    this.caches.set(info.id, cache);
+    this.managers.set(info.id, manager);
+    return manager;
+  }
+
+  private async shutdownLocalDevice(deviceId: string): Promise<void> {
+    const manager = this.managers.get(deviceId);
+    if (manager) await manager.close();
+    const cache = this.caches.get(deviceId);
+    if (cache) cache.shutdown();
+    this.managers.delete(deviceId);
+    this.caches.delete(deviceId);
+    this.ownedDeviceIds.delete(deviceId);
+  }
+
+  private startLeaseMaintenance(): void {
+    if (!loadConfig().modules.multiInstanceLeasing) return;
+    if (!this.leaseRenewTimer) {
+      this.leaseRenewTimer = setInterval(() => {
+        void this.renewLeases();
+      }, loadConfig().DEVICE_LEASE_RENEW_INTERVAL_MS);
+      this.leaseRenewTimer.unref();
+    }
+    if (!this.leaseReconcileTimer) {
+      this.leaseReconcileTimer = setInterval(() => {
+        void this.reconcileLeases();
+      }, loadConfig().DEVICE_LEASE_RECONCILE_INTERVAL_MS);
+      this.leaseReconcileTimer.unref();
+    }
+  }
+
+  private stopLeaseMaintenance(): void {
+    if (this.leaseRenewTimer) {
+      clearInterval(this.leaseRenewTimer);
+      this.leaseRenewTimer = null;
+    }
+    if (this.leaseReconcileTimer) {
+      clearInterval(this.leaseReconcileTimer);
+      this.leaseReconcileTimer = null;
+    }
+  }
+
+  private async renewLeases(): Promise<void> {
+    for (const deviceId of [...this.ownedDeviceIds]) {
+      const stillOwned = await this.claimLease(deviceId);
+      if (!stillOwned) {
+        logger.warn({ deviceId, instanceId: loadConfig().INSTANCE_ID }, 'Lost device lease to another instance; shutting down local manager');
+        await this.shutdownLocalDevice(deviceId);
+      }
+    }
+  }
+
+  private async reconcileLeases(): Promise<void> {
+    const config = loadConfig();
+    if (!config.modules.multiInstanceLeasing) {
+      const deviceInfos = [...this.infos.values()].filter((info) => !this.ownedDeviceIds.has(info.id));
+      for (let index = 0; index < deviceInfos.length; index += config.DEVICE_START_BATCH_SIZE) {
+        const batch = deviceInfos.slice(index, index + config.DEVICE_START_BATCH_SIZE);
+        await Promise.all(batch.map(async (info) => {
+          try {
+            const manager = await this.ensureLocalDevice(info);
+            this.ownedDeviceIds.add(info.id);
+            await manager.start();
+          } catch (err) {
+            logger.error({ err, deviceId: info.id }, 'Failed to start device without leasing');
+          }
+        }));
+        if (index + config.DEVICE_START_BATCH_SIZE < deviceInfos.length && config.DEVICE_START_BATCH_DELAY_MS > 0) {
+          await new Promise((resolve) => setTimeout(resolve, config.DEVICE_START_BATCH_DELAY_MS));
+        }
+      }
+      return;
+    }
+    const deviceInfos = [...this.infos.values()].filter((info) => !this.ownedDeviceIds.has(info.id));
+    for (let index = 0; index < deviceInfos.length; index += config.DEVICE_START_BATCH_SIZE) {
+      const batch = deviceInfos.slice(index, index + config.DEVICE_START_BATCH_SIZE);
+      await Promise.all(batch.map(async (info) => {
+        const claimed = await this.claimLease(info.id);
+        if (!claimed) return;
+        try {
+          const manager = await this.ensureLocalDevice(info);
+          this.ownedDeviceIds.add(info.id);
+          await manager.start();
+          logger.info({ deviceId: info.id, clientId: info.clientId, instanceId: config.INSTANCE_ID }, 'Device lease claimed and manager started');
+        } catch (err) {
+          this.ownedDeviceIds.delete(info.id);
+          logger.error({ err, deviceId: info.id }, 'Failed to start claimed device');
+        }
+      }));
+
+      if (index + config.DEVICE_START_BATCH_SIZE < deviceInfos.length && config.DEVICE_START_BATCH_DELAY_MS > 0) {
+        await new Promise((resolve) => setTimeout(resolve, config.DEVICE_START_BATCH_DELAY_MS));
+      }
+    }
   }
 
   // ── Phone access control ───────────────────────────────────────────────────
@@ -89,32 +255,28 @@ class DeviceManager {
     const redis = getRedis();
     const config = loadConfig();
 
-    const keys = await redis.keys('wa:device:*');
-    await Promise.all(
-      keys.map(async (key) => {
-        const raw = await redis.get(key);
-        if (!raw) return;
-        const info: StoredDeviceInfo = JSON.parse(raw);
-        const authDir = path.join(config.AUTH_BASE_DIR, info.id);
-        await fs.mkdir(authDir, { recursive: true });
+    let deviceIds = await redis.smembers(this.allDevicesKey());
+    if (deviceIds.length === 0) {
+      const legacyKeys = await redis.keys('wa:device:*');
+      deviceIds = legacyKeys.map((key) => key.slice('wa:device:'.length));
+      if (deviceIds.length > 0) {
+        await redis.sadd(this.allDevicesKey(), ...deviceIds);
+      }
+    }
 
-        const cache = new DeviceCache(info.id);
-        await cache.loadFromRedis();
+    const infos = (await redis.mget(deviceIds.map((deviceId) => this.deviceRedisKey(deviceId))))
+      .filter((raw): raw is string => !!raw)
+      .map((raw) => JSON.parse(raw) as StoredDeviceInfo);
 
-        const manager = new BaileysAdapter(info.id, info.clientId, authDir, cache);
-        this.attachPhoneVerifier(manager, info.clientId, info.id);
+    for (const info of infos) {
+      this.infos.set(info.id, info);
+      this.trackClientDevice(info.clientId, info.id);
+    }
 
-        this.infos.set(info.id, info);
-        this.caches.set(info.id, cache);
-        this.managers.set(info.id, manager);
+    await this.reconcileLeases();
+    this.startLeaseMaintenance();
 
-        manager.start().catch((err) =>
-          logger.error({ err, deviceId: info.id }, 'Failed to start device on load'),
-        );
-      }),
-    );
-
-    logger.info({ count: this.managers.size }, 'Devices loaded from Redis');
+    logger.info({ count: this.infos.size, owned: this.ownedDeviceIds.size, instanceId: config.INSTANCE_ID }, 'Devices loaded from Redis');
 
     // Preload per-client configs for all known clients
     const uniqueClientIds = [...new Set([...this.infos.values()].map((i) => i.clientId))];
@@ -140,6 +302,8 @@ class DeviceManager {
     await Promise.all([
       redis.set(this.deviceRedisKey(deviceId), JSON.stringify(info)),
       redis.sadd(this.clientDevicesKey(clientId), deviceId),
+      redis.sadd(this.allDevicesKey(), deviceId),
+      redis.sadd(this.clientsKey(), clientId),
     ]);
 
     const cache = new DeviceCache(deviceId);
@@ -154,6 +318,10 @@ class DeviceManager {
     this.infos.set(deviceId, info);
     this.caches.set(deviceId, cache);
     this.managers.set(deviceId, manager);
+    this.ownedDeviceIds.add(deviceId);
+    this.trackClientDevice(clientId, deviceId);
+    await this.claimLease(deviceId);
+    this.startLeaseMaintenance();
 
     manager.start().catch((err) =>
       logger.error({ err, deviceId }, 'Failed to start new device'),
@@ -181,7 +349,14 @@ class DeviceManager {
     await Promise.all([
       redis.del(this.deviceRedisKey(deviceId)),
       redis.srem(this.clientDevicesKey(clientId), deviceId),
+      redis.srem(this.allDevicesKey(), deviceId),
+      redis.del(this.deviceLeaseKey(deviceId)),
     ]);
+
+    const remainingClientDevices = await redis.scard(this.clientDevicesKey(clientId));
+    if (remainingClientDevices === 0) {
+      await redis.srem(this.clientsKey(), clientId);
+    }
 
     const authDir = path.join(config.AUTH_BASE_DIR, deviceId);
     await fs.rm(authDir, { recursive: true, force: true });
@@ -189,6 +364,8 @@ class DeviceManager {
     this.managers.delete(deviceId);
     this.caches.delete(deviceId);
     this.infos.delete(deviceId);
+    this.ownedDeviceIds.delete(deviceId);
+    this.untrackClientDevice(clientId, deviceId);
 
     logger.info({ deviceId, clientId }, 'Device removed');
   }
@@ -204,18 +381,43 @@ class DeviceManager {
   }
 
   getClientInfos(clientId: string): StoredDeviceInfo[] {
-    return [...this.infos.values()].filter((i) => i.clientId === clientId);
+    const deviceIds = this.clientDeviceIds.get(clientId);
+    if (!deviceIds) return [];
+    return [...deviceIds].map((deviceId) => this.infos.get(deviceId)).filter((info): info is StoredDeviceInfo => !!info);
   }
 
   getAllInfos(): StoredDeviceInfo[] {
     return [...this.infos.values()];
   }
 
+  getClientIds(): string[] {
+    return [...this.clientDeviceIds.keys()];
+  }
+
+  isOwnedLocally(deviceId: string): boolean {
+    return this.ownedDeviceIds.has(deviceId);
+  }
+
+  async getOwnerInstanceId(deviceId: string): Promise<string | null> {
+    if (!this.infos.has(deviceId)) return null;
+    if (!loadConfig().modules.multiInstanceLeasing) {
+      return loadConfig().INSTANCE_ID;
+    }
+    return getRedis().get(this.deviceLeaseKey(deviceId));
+  }
+
   /** Throws if device doesn't belong to this client. Returns the adapter. */
   assertManager(clientId: string, deviceId: string): IWhatsAppAdapter {
     this.assertOwnership(clientId, deviceId);
     const manager = this.managers.get(deviceId);
-    if (!manager) throw new Error('Device manager not found');
+    if (!manager) {
+      throw new AppError(
+        ErrorCode.SERVICE_UNAVAILABLE,
+        `Device ${deviceId} is owned by another instance or still recovering`,
+        503,
+        true,
+      );
+    }
     return manager;
   }
 
@@ -328,9 +530,12 @@ class DeviceManager {
   }
 
   async shutdownAll(): Promise<void> {
+    this.stopLeaseMaintenance();
     await this.flushAll();
     for (const cache of this.caches.values()) cache.shutdown();
     await Promise.all([...this.managers.values()].map((m) => m.close()));
+    await Promise.all([...this.ownedDeviceIds].map((deviceId) => this.releaseLease(deviceId)));
+    this.ownedDeviceIds.clear();
   }
 }
 

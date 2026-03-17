@@ -1,0 +1,10 @@
+services:
+  app:
+    env_file: .env
+    environment:
+      MODULE_PROFILE: full
+      INSTANCE_BASE_URL: ${INSTANCE_BASE_URL}
+
+  caddy:
+    environment:
+      DOMAIN: ${DOMAIN}
