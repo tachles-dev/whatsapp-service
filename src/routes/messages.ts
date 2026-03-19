@@ -135,11 +135,11 @@ async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker:
   return results;
 }
 
-export async function registerMessageRoutes(app: FastifyInstance): Promise<void> {
+export async function registerMessageRoutes(app: FastifyInstance, basePath = '/api'): Promise<void> {
   // ── Layer 1: single sends ──────────────────────────────────────────────────
 
   // POST .../messages/send-text
-  app.post('/api/clients/:clientId/devices/:deviceId/messages/send-text', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/messages/send-text`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const parsed = sendTextSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -152,7 +152,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
   });
 
   // POST .../messages/send-image
-  app.post('/api/clients/:clientId/devices/:deviceId/messages/send-image', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/messages/send-image`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const parsed = sendImageSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -168,7 +168,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
   });
 
   // POST .../messages/send-video
-  app.post('/api/clients/:clientId/devices/:deviceId/messages/send-video', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/messages/send-video`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const parsed = sendVideoSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -184,7 +184,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
   });
 
   // POST .../messages/send-audio
-  app.post('/api/clients/:clientId/devices/:deviceId/messages/send-audio', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/messages/send-audio`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const parsed = sendAudioSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -200,7 +200,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
   });
 
   // POST .../messages/send-document
-  app.post('/api/clients/:clientId/devices/:deviceId/messages/send-document', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/messages/send-document`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const parsed = sendDocumentSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -217,7 +217,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
   });
 
   // POST .../messages/send-location
-  app.post('/api/clients/:clientId/devices/:deviceId/messages/send-location', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/messages/send-location`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const parsed = sendLocationSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -235,7 +235,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
   });
 
   // POST .../messages/send-reaction
-  app.post('/api/clients/:clientId/devices/:deviceId/messages/send-reaction', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/messages/send-reaction`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const parsed = sendReactionSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -248,7 +248,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
   });
 
   // DELETE .../messages/:messageId
-  app.delete('/api/clients/:clientId/devices/:deviceId/messages/:messageId', async (request: FastifyRequest, reply) => {
+  app.delete(`${basePath}/clients/:clientId/devices/:deviceId/messages/:messageId`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, messageId } = request.params as MessageParams;
     const { jid, phone, forEveryone } = request.query as { jid?: string; phone?: string; forEveryone?: string };
     const resolvedJid = jid ?? (phone ? `${phone}@s.whatsapp.net` : null);
@@ -267,7 +267,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
    * Fan-out: sends the same text to up to 100 JIDs in parallel (best-effort).
    * Returns per-JID results so callers can handle partial failures.
    */
-  app.post('/api/clients/:clientId/devices/:deviceId/messages/broadcast', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/messages/broadcast`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const parsed = broadcastSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -291,7 +291,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
 
   if (loadConfig().modules.scheduling) {
     // POST .../messages/schedule-text
-    app.post('/api/clients/:clientId/devices/:deviceId/messages/schedule-text', async (request: FastifyRequest, reply) => {
+    app.post(`${basePath}/clients/:clientId/devices/:deviceId/messages/schedule-text`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const parsed = scheduleTextSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -310,7 +310,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
     });
 
     // GET .../messages/scheduled
-    app.get('/api/clients/:clientId/devices/:deviceId/messages/scheduled', async (request: FastifyRequest, reply) => {
+    app.get(`${basePath}/clients/:clientId/devices/:deviceId/messages/scheduled`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const parsed = scheduledListQuerySchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -321,7 +321,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
     });
 
     // GET .../messages/scheduled/:scheduleId
-    app.get('/api/clients/:clientId/devices/:deviceId/messages/scheduled/:scheduleId', async (request: FastifyRequest, reply) => {
+    app.get(`${basePath}/clients/:clientId/devices/:deviceId/messages/scheduled/:scheduleId`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, scheduleId } = request.params as DeviceParams & { scheduleId: string };
     try {
       const scheduled = await scheduledMessageService.getScheduledMessage(clientId, deviceId, scheduleId);
@@ -330,7 +330,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
     });
 
     // DELETE .../messages/scheduled/:scheduleId
-    app.delete('/api/clients/:clientId/devices/:deviceId/messages/scheduled/:scheduleId', async (request: FastifyRequest, reply) => {
+    app.delete(`${basePath}/clients/:clientId/devices/:deviceId/messages/scheduled/:scheduleId`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, scheduleId } = request.params as DeviceParams & { scheduleId: string };
     try {
       const scheduled = await scheduledMessageService.cancelScheduledMessage(clientId, deviceId, scheduleId);
@@ -339,7 +339,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
     });
 
     // POST .../messages/scheduled/:scheduleId/reschedule
-    app.post('/api/clients/:clientId/devices/:deviceId/messages/scheduled/:scheduleId/reschedule', async (request: FastifyRequest, reply) => {
+    app.post(`${basePath}/clients/:clientId/devices/:deviceId/messages/scheduled/:scheduleId/reschedule`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, scheduleId } = request.params as DeviceParams & { scheduleId: string };
     const parsed = rescheduleSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -357,7 +357,7 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
 
   // ── Backward compat: legacy /send endpoint ─────────────────────────────────
 
-  app.post('/api/clients/:clientId/devices/:deviceId/send', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/send`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const parsed = legacySendSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));

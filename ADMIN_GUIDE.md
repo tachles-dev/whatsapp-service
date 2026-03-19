@@ -8,6 +8,8 @@ All admin operations require the master API key (`API_KEY` env var). Pass it in 
 x-api-key: <your-master-API_KEY>
 ```
 
+For new integrations, prefer the versioned API base path ` /api/v1 `. Legacy ` /api ` examples in older clients continue to work, but the stable contract is published under ` /api/v1/reference ` and ` /api/v1/openapi.json `.
+
 ---
 
 ## 1. Registering a New Client
@@ -33,7 +35,7 @@ Content-Type: application/json
 
 ```json
 {
-  "ok": true,
+  "success": true,
   "data": {
     "key": "a3f...7d2",
     "warning": "Store this key securely. It will never be shown again."
@@ -188,7 +190,7 @@ Cookie: wga_admin=<session-cookie>
 
 ```json
 {
-  "ok": true,
+  "success": true,
   "data": {
     "devices": {
       "total": 4,

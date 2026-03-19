@@ -34,8 +34,8 @@ async function getQueueStats(queue: { getWaitingCount(): Promise<number>; getAct
   return { waiting, active, completed, failed, delayed };
 }
 
-export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
-  app.post('/api/admin/login', async (request: FastifyRequest, reply: FastifyReply) => {
+export async function registerAdminRoutes(app: FastifyInstance, basePath = '/api', includeDashboard = true): Promise<void> {
+  app.post(`${basePath}/admin/login`, async (request: FastifyRequest, reply: FastifyReply) => {
     if (!loadConfig().ADMIN_USERNAME || !loadConfig().ADMIN_PASSWORD) {
       return reply.code(503).send({ success: false, error: { code: 'SERVICE_UNAVAILABLE', message: 'Admin credentials are not configured' } });
     }
@@ -51,7 +51,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     return ok({ authenticated: true });
   });
 
-  app.post('/api/admin/logout', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.post(`${basePath}/admin/logout`, async (request: FastifyRequest, reply: FastifyReply) => {
     const cookies = parseCookies(request.headers.cookie);
     const cookieName = loadConfig().ADMIN_SESSION_COOKIE;
     await revokeAdminSession(cookies[cookieName]);
@@ -61,7 +61,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // ── JSON stats API ──────────────────────────────────────────────────────────
-  app.get('/api/admin/stats', async () => {
+  app.get(`${basePath}/admin/stats`, async () => {
     const allDevices = deviceManager.getAllInfos();
 
     const byStatus: Record<string, number> = {
@@ -97,13 +97,13 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.get('/api/admin/audit', async (request: FastifyRequest) => {
+  app.get(`${basePath}/admin/audit`, async (request: FastifyRequest) => {
     const parsed = auditQuerySchema.safeParse(request.query);
     const limit = parsed.success ? parsed.data.limit : 100;
     return ok(await listAuditEvents(limit));
   });
 
-  app.get('/api/admin/runtime', async () => {
+  app.get(`${basePath}/admin/runtime`, async () => {
     const config = loadConfig();
     return ok({
       instanceId: config.INSTANCE_ID,
@@ -118,10 +118,11 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  // ── HTML dashboard ──────────────────────────────────────────────────────────
-  app.get('/admin', async (_request: FastifyRequest, reply: FastifyReply) => {
-    reply.type('text/html').send(DASHBOARD_HTML);
-  });
+  if (includeDashboard) {
+    app.get('/admin', async (_request: FastifyRequest, reply: FastifyReply) => {
+      reply.type('text/html').send(DASHBOARD_HTML);
+    });
+  }
 }
 
 // ── Dashboard HTML (self-contained, no external dependencies) ─────────────────

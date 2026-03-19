@@ -28,9 +28,9 @@ const resolveLidsSchema = z.object({
   jids: z.array(z.string().min(1)).min(1).max(200),
 });
 
-export async function registerContactRoutes(app: FastifyInstance): Promise<void> {
+export async function registerContactRoutes(app: FastifyInstance, basePath = '/api'): Promise<void> {
   // GET .../contacts/check?phone=<number>
-  app.get('/api/clients/:clientId/devices/:deviceId/contacts/check', async (request: FastifyRequest, reply) => {
+  app.get(`${basePath}/clients/:clientId/devices/:deviceId/contacts/check`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const { phone } = request.query as { phone?: string };
     if (!phone || !phonePattern.test(phone)) {
@@ -44,7 +44,7 @@ export async function registerContactRoutes(app: FastifyInstance): Promise<void>
   });
 
   // POST .../contacts/check-bulk   — Layer 2
-  app.post('/api/clients/:clientId/devices/:deviceId/contacts/check-bulk', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/contacts/check-bulk`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const parsed = checkBulkSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -56,7 +56,7 @@ export async function registerContactRoutes(app: FastifyInstance): Promise<void>
   });
 
   // GET .../contacts/blocklist
-  app.get('/api/clients/:clientId/devices/:deviceId/contacts/blocklist', async (request: FastifyRequest, reply) => {
+  app.get(`${basePath}/clients/:clientId/devices/:deviceId/contacts/blocklist`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -66,7 +66,7 @@ export async function registerContactRoutes(app: FastifyInstance): Promise<void>
   });
 
   // GET .../contacts/:jid/profile-picture
-  app.get('/api/clients/:clientId/devices/:deviceId/contacts/:jid/profile-picture', async (request: FastifyRequest, reply) => {
+  app.get(`${basePath}/clients/:clientId/devices/:deviceId/contacts/:jid/profile-picture`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as ContactParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -76,7 +76,7 @@ export async function registerContactRoutes(app: FastifyInstance): Promise<void>
   });
 
   // GET .../contacts/:jid/status
-  app.get('/api/clients/:clientId/devices/:deviceId/contacts/:jid/status', async (request: FastifyRequest, reply) => {
+  app.get(`${basePath}/clients/:clientId/devices/:deviceId/contacts/:jid/status`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as ContactParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -86,7 +86,7 @@ export async function registerContactRoutes(app: FastifyInstance): Promise<void>
   });
 
   // POST .../contacts/:jid/block
-  app.post('/api/clients/:clientId/devices/:deviceId/contacts/:jid/block', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/contacts/:jid/block`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as ContactParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -96,7 +96,7 @@ export async function registerContactRoutes(app: FastifyInstance): Promise<void>
   });
 
   // DELETE .../contacts/:jid/block
-  app.delete('/api/clients/:clientId/devices/:deviceId/contacts/:jid/block', async (request: FastifyRequest, reply) => {
+  app.delete(`${basePath}/clients/:clientId/devices/:deviceId/contacts/:jid/block`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as ContactParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -106,7 +106,7 @@ export async function registerContactRoutes(app: FastifyInstance): Promise<void>
   });
 
   // POST .../contacts/resolve-lids   — Layer 2
-  app.post('/api/clients/:clientId/devices/:deviceId/contacts/resolve-lids', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/contacts/resolve-lids`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const parsed = resolveLidsSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -117,7 +117,7 @@ export async function registerContactRoutes(app: FastifyInstance): Promise<void>
   });
 
   // POST .../contacts/:jid/subscribe-presence
-  app.post('/api/clients/:clientId/devices/:deviceId/contacts/:jid/subscribe-presence', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/contacts/:jid/subscribe-presence`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as ContactParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);

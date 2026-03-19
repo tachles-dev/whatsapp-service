@@ -21,16 +21,16 @@ const phoneSchema = z.object({
   phone: z.string().regex(phonePattern, 'Phone must be digits only (E.164 without +)'),
 });
 
-export async function registerAccessRoutes(app: FastifyInstance): Promise<void> {
+export async function registerAccessRoutes(app: FastifyInstance, basePath = '/api'): Promise<void> {
   // ── Banned numbers ─────────────────────────────────────────────────────────
 
-  app.get('/api/clients/:clientId/banned-numbers', async (request: FastifyRequest) => {
+  app.get(`${basePath}/clients/:clientId/banned-numbers`, async (request: FastifyRequest) => {
     const { clientId } = request.params as ClientParams;
     const numbers = await deviceManager.getBannedNumbers(clientId);
     return ok(numbers);
   });
 
-  app.post('/api/clients/:clientId/banned-numbers', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/banned-numbers`, async (request: FastifyRequest, reply) => {
     const { clientId } = request.params as ClientParams;
     const parsed = phoneSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -40,7 +40,7 @@ export async function registerAccessRoutes(app: FastifyInstance): Promise<void> 
     } catch (err) { sendError(err, reply); }
   });
 
-  app.delete('/api/clients/:clientId/banned-numbers/:phone', async (request: FastifyRequest, reply) => {
+  app.delete(`${basePath}/clients/:clientId/banned-numbers/:phone`, async (request: FastifyRequest, reply) => {
     const { clientId, phone } = request.params as PhoneParams;
     try {
       await deviceManager.removeBannedNumber(clientId, phone);
@@ -50,13 +50,13 @@ export async function registerAccessRoutes(app: FastifyInstance): Promise<void> 
 
   // ── Allowed numbers ────────────────────────────────────────────────────────
 
-  app.get('/api/clients/:clientId/allowed-numbers', async (request: FastifyRequest) => {
+  app.get(`${basePath}/clients/:clientId/allowed-numbers`, async (request: FastifyRequest) => {
     const { clientId } = request.params as ClientParams;
     const numbers = await deviceManager.getAllowedNumbers(clientId);
     return ok(numbers);
   });
 
-  app.post('/api/clients/:clientId/allowed-numbers', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/allowed-numbers`, async (request: FastifyRequest, reply) => {
     const { clientId } = request.params as ClientParams;
     const parsed = phoneSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -66,7 +66,7 @@ export async function registerAccessRoutes(app: FastifyInstance): Promise<void> 
     } catch (err) { sendError(err, reply); }
   });
 
-  app.delete('/api/clients/:clientId/allowed-numbers/:phone', async (request: FastifyRequest, reply) => {
+  app.delete(`${basePath}/clients/:clientId/allowed-numbers/:phone`, async (request: FastifyRequest, reply) => {
     const { clientId, phone } = request.params as PhoneParams;
     try {
       await deviceManager.removeAllowedNumber(clientId, phone);

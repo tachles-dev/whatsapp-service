@@ -2,6 +2,8 @@
 
 This guide is for teams joining the WhatsApp Gateway Service for the first time.
 
+For new integrations, treat `/api/v1` as the primary API surface. Legacy `/api` routes remain available for compatibility, but the generated contract lives at `/api/v1/reference` and `/api/v1/openapi.json`.
+
 ## What This Service Does
 
 The service provides:

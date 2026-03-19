@@ -33,9 +33,8 @@ const presenceSchema = z.object({
   toJid: z.string().optional(),
 });
 
-export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> {
-  // GET /api/clients/:clientId/devices
-  app.get('/api/clients/:clientId/devices', async (request: FastifyRequest) => {
+export async function registerDeviceRoutes(app: FastifyInstance, basePath = '/api'): Promise<void> {
+  app.get(`${basePath}/clients/:clientId/devices`, async (request: FastifyRequest) => {
     const { clientId } = request.params as { clientId: string };
     const infos = deviceManager.getClientInfos(clientId);
     const result = infos.map((info) => ({
@@ -45,8 +44,7 @@ export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> 
     return ok(result);
   });
 
-  // POST /api/clients/:clientId/devices
-  app.post('/api/clients/:clientId/devices', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices`, async (request: FastifyRequest, reply) => {
     const { clientId } = request.params as { clientId: string };
     const parsed = createDeviceSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -61,8 +59,7 @@ export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> 
     }
   });
 
-  // DELETE /api/clients/:clientId/devices/:deviceId
-  app.delete('/api/clients/:clientId/devices/:deviceId', async (request: FastifyRequest, reply) => {
+  app.delete(`${basePath}/clients/:clientId/devices/:deviceId`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     try {
       await scheduledMessageService.purgeDeviceScheduledMessages(clientId, deviceId);
@@ -74,8 +71,7 @@ export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> 
     }
   });
 
-  // GET /api/clients/:clientId/devices/:deviceId/status
-  app.get('/api/clients/:clientId/devices/:deviceId/status', async (request: FastifyRequest, reply) => {
+  app.get(`${basePath}/clients/:clientId/devices/:deviceId/status`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -85,8 +81,7 @@ export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> 
     }
   });
 
-  // GET /api/clients/:clientId/devices/:deviceId/auth/qr
-  app.get('/api/clients/:clientId/devices/:deviceId/auth/qr', async (request: FastifyRequest, reply) => {
+  app.get(`${basePath}/clients/:clientId/devices/:deviceId/auth/qr`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -106,8 +101,7 @@ export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> 
     }
   });
 
-  // POST /api/clients/:clientId/devices/:deviceId/auth/reset
-  app.post('/api/clients/:clientId/devices/:deviceId/auth/reset', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/auth/reset`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -119,8 +113,7 @@ export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> 
     }
   });
 
-  // POST /api/clients/:clientId/devices/:deviceId/disconnect
-  app.post('/api/clients/:clientId/devices/:deviceId/disconnect', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/disconnect`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -132,8 +125,7 @@ export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> 
     }
   });
 
-  // POST /api/clients/:clientId/devices/:deviceId/reconnect
-  app.post('/api/clients/:clientId/devices/:deviceId/reconnect', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/reconnect`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -145,8 +137,7 @@ export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> 
     }
   });
 
-  // POST /api/clients/:clientId/devices/:deviceId/cache/flush
-  app.post('/api/clients/:clientId/devices/:deviceId/cache/flush', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/cache/flush`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     try {
       await deviceManager.flushChatCache(clientId, deviceId);
@@ -157,8 +148,7 @@ export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> 
     }
   });
 
-  // GET /api/clients/:clientId/devices/:deviceId/profile
-  app.get('/api/clients/:clientId/devices/:deviceId/profile', async (request: FastifyRequest, reply) => {
+  app.get(`${basePath}/clients/:clientId/devices/:deviceId/profile`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -169,8 +159,7 @@ export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> 
     }
   });
 
-  // PUT /api/clients/:clientId/devices/:deviceId/profile/name
-  app.put('/api/clients/:clientId/devices/:deviceId/profile/name', async (request: FastifyRequest, reply) => {
+  app.put(`${basePath}/clients/:clientId/devices/:deviceId/profile/name`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const parsed = profileNameSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -185,8 +174,7 @@ export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> 
     }
   });
 
-  // PUT /api/clients/:clientId/devices/:deviceId/profile/status
-  app.put('/api/clients/:clientId/devices/:deviceId/profile/status', async (request: FastifyRequest, reply) => {
+  app.put(`${basePath}/clients/:clientId/devices/:deviceId/profile/status`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const parsed = profileStatusSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -201,8 +189,7 @@ export async function registerDeviceRoutes(app: FastifyInstance): Promise<void> 
     }
   });
 
-  // POST /api/clients/:clientId/devices/:deviceId/presence
-  app.post('/api/clients/:clientId/devices/:deviceId/presence', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/presence`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const parsed = presenceSchema.safeParse(request.body);
     if (!parsed.success) {

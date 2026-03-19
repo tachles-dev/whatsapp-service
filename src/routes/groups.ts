@@ -57,11 +57,11 @@ const joinSchema = z.object({
   inviteCode: z.string().min(8),
 });
 
-export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
+export async function registerGroupRoutes(app: FastifyInstance, basePath = '/api'): Promise<void> {
   // ── Subscriptions ──────────────────────────────────────────────────────────
 
   // GET .../groups/subscribed
-  app.get('/api/clients/:clientId/devices/:deviceId/groups/subscribed', async (request: FastifyRequest, reply) => {
+  app.get(`${basePath}/clients/:clientId/devices/:deviceId/groups/subscribed`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -71,7 +71,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // POST .../groups/:jid/subscribe
-  app.post('/api/clients/:clientId/devices/:deviceId/groups/:jid/subscribe', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/groups/:jid/subscribe`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as GroupParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -81,7 +81,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // DELETE .../groups/:jid/subscribe
-  app.delete('/api/clients/:clientId/devices/:deviceId/groups/:jid/subscribe', async (request: FastifyRequest, reply) => {
+  app.delete(`${basePath}/clients/:clientId/devices/:deviceId/groups/:jid/subscribe`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as GroupParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -93,7 +93,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
   // ── Metadata ───────────────────────────────────────────────────────────────
 
   // GET .../groups/:jid/metadata
-  app.get('/api/clients/:clientId/devices/:deviceId/groups/:jid/metadata', async (request: FastifyRequest, reply) => {
+  app.get(`${basePath}/clients/:clientId/devices/:deviceId/groups/:jid/metadata`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as GroupParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -103,7 +103,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // GET .../groups/:jid/members
-  app.get('/api/clients/:clientId/devices/:deviceId/groups/:jid/members', async (request: FastifyRequest, reply) => {
+  app.get(`${basePath}/clients/:clientId/devices/:deviceId/groups/:jid/members`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as GroupParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -115,7 +115,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
   // ── CRUD ───────────────────────────────────────────────────────────────────
 
   // POST .../groups
-  app.post('/api/clients/:clientId/devices/:deviceId/groups', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/groups`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const parsed = createGroupSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -127,7 +127,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // PUT .../groups/:jid/subject
-  app.put('/api/clients/:clientId/devices/:deviceId/groups/:jid/subject', async (request: FastifyRequest, reply) => {
+  app.put(`${basePath}/clients/:clientId/devices/:deviceId/groups/:jid/subject`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as GroupParams;
     const parsed = subjectSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -139,7 +139,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // PUT .../groups/:jid/description
-  app.put('/api/clients/:clientId/devices/:deviceId/groups/:jid/description', async (request: FastifyRequest, reply) => {
+  app.put(`${basePath}/clients/:clientId/devices/:deviceId/groups/:jid/description`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as GroupParams;
     const parsed = descriptionSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -153,7 +153,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
   // ── Participants (Layer 2) ─────────────────────────────────────────────────
 
   // PUT .../groups/:jid/participants
-  app.put('/api/clients/:clientId/devices/:deviceId/groups/:jid/participants', async (request: FastifyRequest, reply) => {
+  app.put(`${basePath}/clients/:clientId/devices/:deviceId/groups/:jid/participants`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as GroupParams;
     const parsed = participantsSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -167,7 +167,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
   // ── Settings & lifecycle ───────────────────────────────────────────────────
 
   // PUT .../groups/:jid/settings
-  app.put('/api/clients/:clientId/devices/:deviceId/groups/:jid/settings', async (request: FastifyRequest, reply) => {
+  app.put(`${basePath}/clients/:clientId/devices/:deviceId/groups/:jid/settings`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as GroupParams;
     const parsed = settingsSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -179,7 +179,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // POST .../groups/:jid/leave
-  app.post('/api/clients/:clientId/devices/:deviceId/groups/:jid/leave', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/groups/:jid/leave`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as GroupParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -191,7 +191,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
   // ── Invite ─────────────────────────────────────────────────────────────────
 
   // GET .../groups/:jid/invite-code
-  app.get('/api/clients/:clientId/devices/:deviceId/groups/:jid/invite-code', async (request: FastifyRequest, reply) => {
+  app.get(`${basePath}/clients/:clientId/devices/:deviceId/groups/:jid/invite-code`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as GroupParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -201,7 +201,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // POST .../groups/:jid/invite-code/revoke
-  app.post('/api/clients/:clientId/devices/:deviceId/groups/:jid/invite-code/revoke', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/groups/:jid/invite-code/revoke`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as GroupParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -211,7 +211,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // POST .../groups/join  — Layer 3
-  app.post('/api/clients/:clientId/devices/:deviceId/groups/join', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/groups/join`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const parsed = joinSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));

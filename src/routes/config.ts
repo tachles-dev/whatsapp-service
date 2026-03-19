@@ -37,15 +37,13 @@ const clientConfigSchema = z.object({
   maxDevices: z.coerce.number().int().min(1).max(20).optional(),
 });
 
-export async function registerConfigRoutes(app: FastifyInstance): Promise<void> {
-  // GET /api/clients/:clientId/config
-  app.get('/api/clients/:clientId/config', async (request: FastifyRequest) => {
+export async function registerConfigRoutes(app: FastifyInstance, basePath = '/api'): Promise<void> {
+  app.get(`${basePath}/clients/:clientId/config`, async (request: FastifyRequest) => {
     const { clientId } = request.params as { clientId: string };
     return ok(safeConfig(clientConfigManager.getConfig(clientId)));
   });
 
-  // PUT /api/clients/:clientId/config
-  app.put('/api/clients/:clientId/config', async (request: FastifyRequest, reply) => {
+  app.put(`${basePath}/clients/:clientId/config`, async (request: FastifyRequest, reply) => {
     const { clientId } = request.params as { clientId: string };
     const parsed = clientConfigSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -65,8 +63,7 @@ export async function registerConfigRoutes(app: FastifyInstance): Promise<void> 
     return ok(safeConfig(updated));
   });
 
-  // DELETE /api/clients/:clientId/config
-  app.delete('/api/clients/:clientId/config', async (request: FastifyRequest) => {
+  app.delete(`${basePath}/clients/:clientId/config`, async (request: FastifyRequest) => {
     const { clientId } = request.params as { clientId: string };
     await clientConfigManager.resetConfig(clientId);
     await recordAuditEvent({ action: 'client.config.reset', actorType: 'master-key', actorId: 'master', ip: request.ip, clientId });
@@ -77,7 +74,7 @@ export async function registerConfigRoutes(app: FastifyInstance): Promise<void> 
   // Issues a new API key. Returns the plaintext key ONCE — it is never stored.
   // Optional body: { ttlDays: number }  (default 90, max 365)
   // Requires master API key.
-  app.post('/api/clients/:clientId/key', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/key`, async (request: FastifyRequest, reply) => {
     const { clientId } = request.params as { clientId: string };
     const { ttlDays = 90 } = (request.body as { ttlDays?: number }) ?? {};
     const plaintext = await generateClientKey(clientId, ttlDays);
@@ -94,7 +91,7 @@ export async function registerConfigRoutes(app: FastifyInstance): Promise<void> 
   // The old key is invalidated immediately. Returns a new plaintext key ONCE.
   // Optional body: { ttlDays: number }  (default 90, max 365)
   // Can be called with either the master key or the client's own current key.
-  app.post('/api/clients/:clientId/key/rotate', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/key/rotate`, async (request: FastifyRequest, reply) => {
     const { clientId } = request.params as { clientId: string };
     const { ttlDays = 90 } = (request.body as { ttlDays?: number }) ?? {};
     const provided = request.headers['x-api-key'] as string | undefined;
@@ -126,7 +123,7 @@ export async function registerConfigRoutes(app: FastifyInstance): Promise<void> 
 
   // DELETE /api/clients/:clientId/key
   // Revokes the client API key immediately. Requires master key.
-  app.delete('/api/clients/:clientId/key', async (request: FastifyRequest) => {
+  app.delete(`${basePath}/clients/:clientId/key`, async (request: FastifyRequest) => {
     const { clientId } = request.params as { clientId: string };
     await revokeClientKey(clientId);
     logger.info({ clientId }, 'Client API key revoked');

@@ -33,9 +33,9 @@ const ephemeralSchema = z.object({
   expiration: z.union([z.literal(0), z.literal(86400), z.literal(604800), z.literal(7776000)]),
 });
 
-export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
+export async function registerChatRoutes(app: FastifyInstance, basePath = '/api'): Promise<void> {
   // GET .../chats
-  app.get('/api/clients/:clientId/devices/:deviceId/chats', async (request: FastifyRequest, reply) => {
+  app.get(`${basePath}/clients/:clientId/devices/:deviceId/chats`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId } = request.params as DeviceParams;
     const { kind, hideUnnamed, q, limit: limitStr, offset: offsetStr } = request.query as {
       kind?: string; hideUnnamed?: string; q?: string; limit?: string; offset?: string;
@@ -52,7 +52,7 @@ export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // POST .../chats/:jid/archive
-  app.post('/api/clients/:clientId/devices/:deviceId/chats/:jid/archive', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/chats/:jid/archive`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as ChatParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -62,7 +62,7 @@ export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // DELETE .../chats/:jid/archive
-  app.delete('/api/clients/:clientId/devices/:deviceId/chats/:jid/archive', async (request: FastifyRequest, reply) => {
+  app.delete(`${basePath}/clients/:clientId/devices/:deviceId/chats/:jid/archive`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as ChatParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -72,7 +72,7 @@ export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // POST .../chats/:jid/mute
-  app.post('/api/clients/:clientId/devices/:deviceId/chats/:jid/mute', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/chats/:jid/mute`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as ChatParams;
     const parsed = muteSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));
@@ -86,7 +86,7 @@ export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // DELETE .../chats/:jid/mute
-  app.delete('/api/clients/:clientId/devices/:deviceId/chats/:jid/mute', async (request: FastifyRequest, reply) => {
+  app.delete(`${basePath}/clients/:clientId/devices/:deviceId/chats/:jid/mute`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as ChatParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -96,7 +96,7 @@ export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // POST .../chats/:jid/pin
-  app.post('/api/clients/:clientId/devices/:deviceId/chats/:jid/pin', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/chats/:jid/pin`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as ChatParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -106,7 +106,7 @@ export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // DELETE .../chats/:jid/pin
-  app.delete('/api/clients/:clientId/devices/:deviceId/chats/:jid/pin', async (request: FastifyRequest, reply) => {
+  app.delete(`${basePath}/clients/:clientId/devices/:deviceId/chats/:jid/pin`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as ChatParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -116,7 +116,7 @@ export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // POST .../chats/:jid/read
-  app.post('/api/clients/:clientId/devices/:deviceId/chats/:jid/read', async (request: FastifyRequest, reply) => {
+  app.post(`${basePath}/clients/:clientId/devices/:deviceId/chats/:jid/read`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as ChatParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -126,7 +126,7 @@ export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // DELETE .../chats/:jid
-  app.delete('/api/clients/:clientId/devices/:deviceId/chats/:jid', async (request: FastifyRequest, reply) => {
+  app.delete(`${basePath}/clients/:clientId/devices/:deviceId/chats/:jid`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as ChatParams;
     try {
       const manager = deviceManager.assertManager(clientId, deviceId);
@@ -136,7 +136,7 @@ export async function registerChatRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // PUT .../chats/:jid/ephemeral  — Layer 3
-  app.put('/api/clients/:clientId/devices/:deviceId/chats/:jid/ephemeral', async (request: FastifyRequest, reply) => {
+  app.put(`${basePath}/clients/:clientId/devices/:deviceId/chats/:jid/ephemeral`, async (request: FastifyRequest, reply) => {
     const { clientId, deviceId, jid } = request.params as ChatParams;
     const parsed = ephemeralSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send(fail('VALIDATION_ERROR', parsed.error.issues.map((i) => i.message).join('; ')));

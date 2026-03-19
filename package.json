@@ -2,7 +2,22 @@
   "name": "whatsapp-gateway-service",
   "version": "1.0.0",
   "description": "WhatsApp Gateway Service - standalone microservice for WhatsApp connectivity via Baileys",
-  "main": "dist/index.js",
+  "main": "dist/sdk.js",
+  "types": "dist/sdk.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/sdk.d.ts",
+      "default": "./dist/sdk.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk.d.ts",
+      "default": "./dist/sdk.js"
+    },
+    "./server": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
