@@ -1,19 +1,76 @@
-# Optional server-local Caddy directives.
-#
-# This file is intentionally not tracked once copied to Caddyfile.local.
-# Put environment-specific overrides here instead of editing the tracked
-# Caddyfile, so `bash scripts/deploy.sh` can pull updates cleanly.
-#
-# The contents of this file are imported inside the main site block, so write
-# normal site directives only. Do not add another {$DOMAIN} block.
 
-# Example: restrict the admin UI to a known source range
-# @admin path /admin* /api/admin*
-# handle @admin {
-#   @blocked not remote_ip 203.0.113.0/24
-#   respond @blocked 403
-#   reverse_proxy app:3000
-# }
+# Caddyfile — production TLS termination for the WhatsApp Gateway Service.
+#
+# Caddy automatically provisions and renews a Let's Encrypt certificate for
+# the domain set in the DOMAIN env var (passed from docker-compose.yml).
+#
+# Local dev without a public domain:
+#   Replace `{$DOMAIN}` with `localhost` — Caddy will issue a self-signed cert.
 
-# Example: add a temporary redirect
-# redir /old-path /new-path 308
+{$DOMAIN} {
+
+  # ── TLS — enforce TLS 1.2+ ────────────────────────────────────────────────
+  tls {
+    protocols tls1.2 tls1.3
+  }
+
+  # ── Rate limiting (caddy-ratelimit module) ──────────────────────────────────
+  # First line of defense: Caddy drops excess requests before they reach Node.
+  # 60 req/min per client IP — generous enough for normal use, tight enough to
+  # block automated abuse.  The app has its own 30 req/min limiter as a second
+  # layer with stricter limits.
+  rate_limit {
+    zone api {
+      key    {remote_host}
+      events 60
+      window 1m
+    }
+  }
+
+  # ── Reverse proxy to the app ──────────────────────────────────────────────
+  reverse_proxy app:3000 {
+    lb_policy least_conn
+    health_uri /api/status/live
+    health_interval 10s
+    health_timeout 5s
+    fail_duration 30s
+  }
+  
+  # ── Security headers ──────────────────────────────────────────────────────
+  header {
+    # Never expose Caddy or Node version information
+    -Server
+    -X-Powered-By
+
+    # HSTS — browser won't attempt plain HTTP after first visit
+    Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+
+    # Content-Security-Policy — lock down the admin dashboard
+    Content-Security-Policy "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; fr>
+
+    # Iframe embedding — deny unless same origin                                                                                                                       X-Frame-Options DENY
+
+    # Prevent MIME sniffing
+    X-Content-Type-Options nosniff
+
+    # Control referrer header for cross-origin requests
+    Referrer-Policy strict-origin-when-cross-origin
+
+    # Basic permissions policy — disable features the service never uses
+    Permissions-Policy "camera=(), microphone=(), geolocation=()"
+  }
+
+  # ── Request body limit ────────────────────────────────────────────────────
+  # Protects against payload-based DoS. Adjust upward only if you send large
+  # base64-encoded media in request bodies.
+  request_body {
+    max_size 25MB
+  }
+
+  # ── Structured access log ─────────────────────────────────────────────────
+  log {
+    output stdout
+    format json
+    level INFO
+  }
+}
