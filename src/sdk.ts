@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import type { LoadSnapshot } from './load-monitor';
 import type {
   ChatMetadata,
+  ClientMetadata,
   ContactStatusInfo,
   DeviceInfo,
   DeviceStatusData,
@@ -93,6 +94,7 @@ export interface ApiOverview {
   };
   links: {
     overview: string;
+    agent?: string;
     reference: string;
     openapi?: string;
     docs: string;
@@ -132,6 +134,63 @@ export interface ApiReference {
   auth: ApiOverview['auth'];
   totals: ApiOverview['totals'];
   groups: ApiReferenceGroup[];
+}
+
+export interface AgentTaskRoute {
+  task: string;
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  path: string;
+  auth: string;
+  notes: string;
+}
+
+export interface AgentWorkflowStep {
+  title: string;
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  path: string;
+  auth: string;
+  notes: string;
+  body?: Record<string, unknown>;
+}
+
+export interface AgentWorkflow {
+  id: string;
+  title: string;
+  outcome: string;
+  steps: AgentWorkflowStep[];
+}
+
+export interface AgentRequestExample {
+  id: string;
+  title: string;
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  path: string;
+  headers: Record<string, string>;
+  body?: Record<string, unknown>;
+}
+
+export interface AgentContext {
+  kind: 'wgs-agent-context/v1';
+  service: ApiOverview['service'] & { sdkPackage: string };
+  links: Required<Pick<ApiOverview['links'], 'overview' | 'reference' | 'docs'>> & ApiOverview['links'] & { agent: string };
+  instructions: string[];
+  auth: {
+    header: 'x-api-key';
+    adminCookie: 'wga_admin';
+    modes: ApiOverview['auth'];
+  };
+  conventions: {
+    preferredBasePath: string;
+    legacyBasePath: string;
+    requestContentType: 'application/json';
+    responseEnvelope: string[];
+    rateLimitHeaders: string[];
+    pathRules: string[];
+  };
+  taskRoutes: AgentTaskRoute[];
+  workflows: AgentWorkflow[];
+  examples: AgentRequestExample[];
+  endpointIndex: Array<ApiReferenceEndpoint & { groupId: string; groupTitle: string }>;
 }
 
 export type GatewayWebhookEvent = WebhookEvent;
@@ -277,6 +336,97 @@ export interface KeyResponse {
   warning: string;
 }
 
+export interface SafeClientConfigView {
+  webhookUrl?: string;
+  webhookApiKey?: string;
+  events?: Required<ClientEventsPatch>;
+  chats?: Required<ClientChatsPatch>;
+  maxDevices?: number;
+  key: {
+    hasKey: boolean;
+    expiresAt?: number;
+    lastUsedAt?: number;
+    lastUsedIp?: string;
+  };
+}
+
+export interface ControlPlaneBootstrapInput {
+  deviceName: string;
+  ttlDays?: number;
+  rotateKey?: boolean;
+  config?: ClientConfigPatch;
+}
+
+export interface ControlPlaneBootstrapResult {
+  clientId: string;
+  key: KeyResponse;
+  device: DeviceInfo;
+  config: SafeClientConfigView;
+  onboardingPath: string;
+}
+
+export interface ControlPlaneOnboardingState {
+  clientId: string;
+  deviceId: string;
+  status: DeviceStatusData;
+  qr: string | null;
+  config: SafeClientConfigView;
+  links: {
+    status: string;
+    qr: string;
+    resetAuth: string;
+  };
+}
+
+export interface ManagedClientSummary {
+  clientId: string;
+  metadata: ClientMetadata;
+  config: SafeClientConfigView;
+  deviceCount: number;
+  devices: Array<{ deviceId: string; name: string; phone: string | null; status: DeviceStatusData['status']; ownerInstanceId: string | null }>;
+  storage: {
+    authBytes: number;
+    storageSoftLimitMb: number | null;
+  };
+  quotas: {
+    windowMs: number;
+    clientLimit: number;
+    deviceLimit: number;
+    clientUsed: number;
+    devicesUsed: Record<string, number>;
+  };
+}
+
+export interface ManagedClientDetail extends ManagedClientSummary {
+  allowedNumbers: string[];
+  bannedNumbers: string[];
+}
+
+export interface ManagedInstanceSummary {
+  instance: {
+    instanceId: string;
+    version: string;
+    basePath: string;
+    profile: string | null;
+  };
+  totals: {
+    clients: number;
+    devices: number;
+    authStorageBytes: number;
+  };
+  limits: {
+    defaultClientSendsPerWindow: number;
+    defaultDeviceSendsPerWindow: number;
+    windowMs: number;
+  };
+}
+
+function summarizeResponseBody(body: string): string {
+  const compact = body.replace(/\s+/g, ' ').trim();
+  if (!compact) return '<empty body>';
+  return compact.slice(0, 200);
+}
+
 function stripTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
 }
@@ -357,7 +507,29 @@ export class WhatsAppGatewayClient {
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     });
 
-    const payload = await response.json() as GatewayEnvelope<T>;
+    const rawBody = await response.text();
+    let payload: GatewayEnvelope<T> | null = null;
+
+    if (rawBody.length > 0) {
+      try {
+        payload = JSON.parse(rawBody) as GatewayEnvelope<T>;
+      } catch {
+        throw new Error(`HTTP ${response.status} from ${path}: invalid JSON response (${summarizeResponseBody(rawBody)})`);
+      }
+    }
+
+    if (!response.ok) {
+      if (payload?.error?.message) {
+        const code = payload.error.code ?? `HTTP_${response.status}`;
+        throw new Error(`${code}: ${payload.error.message}`);
+      }
+      throw new Error(`HTTP ${response.status} from ${path}: ${summarizeResponseBody(rawBody)}`);
+    }
+
+    if (!payload) {
+      throw new Error(`HTTP ${response.status} from ${path}: empty response body`);
+    }
+
     if (!payload.success) {
       const code = payload.error?.code ?? 'UNKNOWN_ERROR';
       const message = payload.error?.message ?? `Request failed for ${path}`;
@@ -372,6 +544,10 @@ export class WhatsAppGatewayClient {
 
   async getApiReference(): Promise<ApiReference> {
     return this.request<ApiReference>(`${this.apiBasePath}/reference`);
+  }
+
+  async getAgentContext(): Promise<AgentContext> {
+    return this.request<AgentContext>(`${this.apiBasePath}/agent`);
   }
 
   async getOpenApiDocument(): Promise<Record<string, unknown>> {
@@ -404,6 +580,38 @@ export class WhatsAppGatewayClient {
 
   async createClientKey(clientId: string, ttlDays?: number): Promise<KeyResponse> {
     return this.request<KeyResponse>(`${this.clientPath(clientId)}/key`, { method: 'POST', body: ttlDays === undefined ? {} : { ttlDays } });
+  }
+
+  async bootstrapTenant(clientId: string, input: ControlPlaneBootstrapInput): Promise<ControlPlaneBootstrapResult> {
+    return this.request<ControlPlaneBootstrapResult>(`${this.controlPlanePath()}/clients/${encodePathSegment(clientId)}/bootstrap`, { method: 'POST', body: input });
+  }
+
+  async getManagedInstance(): Promise<ManagedInstanceSummary> {
+    return this.request<ManagedInstanceSummary>(`${this.controlPlanePath()}/instance`);
+  }
+
+  async listManagedClients(): Promise<ManagedClientSummary[]> {
+    return this.request<ManagedClientSummary[]>(`${this.controlPlanePath()}/clients`);
+  }
+
+  async getManagedClient(clientId: string): Promise<ManagedClientDetail> {
+    return this.request<ManagedClientDetail>(`${this.controlPlanePath()}/clients/${encodePathSegment(clientId)}`);
+  }
+
+  async updateManagedClientMetadata(clientId: string, patch: Record<string, unknown>): Promise<ManagedClientDetail> {
+    return this.request<ManagedClientDetail>(`${this.controlPlanePath()}/clients/${encodePathSegment(clientId)}/metadata`, { method: 'PUT', body: patch });
+  }
+
+  async deleteManagedClient(clientId: string): Promise<{ deleted: true; removedDevices: number }> {
+    return this.request<{ deleted: true; removedDevices: number }>(`${this.controlPlanePath()}/clients/${encodePathSegment(clientId)}`, { method: 'DELETE' });
+  }
+
+  async getOnboardingState(clientId: string, deviceId: string): Promise<ControlPlaneOnboardingState> {
+    return this.request<ControlPlaneOnboardingState>(`${this.controlPlanePath()}/clients/${encodePathSegment(clientId)}/devices/${encodePathSegment(deviceId)}/onboarding`);
+  }
+
+  async reissueOnboardingQr(clientId: string, deviceId: string): Promise<{ message: string; onboardingPath: string }> {
+    return this.request<{ message: string; onboardingPath: string }>(`${this.controlPlanePath()}/clients/${encodePathSegment(clientId)}/devices/${encodePathSegment(deviceId)}/reissue-qr`, { method: 'POST' });
   }
 
   async rotateClientKey(clientId: string, ttlDays?: number): Promise<KeyResponse> {
@@ -720,6 +928,10 @@ export class WhatsAppGatewayClient {
 
   private clientPath(clientId: string): string {
     return `${this.apiBasePath}/clients/${encodePathSegment(clientId)}`;
+  }
+
+  private controlPlanePath(): string {
+    return `${this.apiBasePath}/control-plane`;
   }
 
   private devicePath(clientId: string, deviceId: string): string {

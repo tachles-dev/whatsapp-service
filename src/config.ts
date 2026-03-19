@@ -70,6 +70,13 @@ const envSchema = z.object({
   // Secret used to HMAC-sign per-client API keys before storing in Redis.
   // Changing this invalidates all existing client keys.
   KEY_SECRET: z.string().min(32, 'KEY_SECRET must be at least 32 chars'),
+  // Optional second factor for master-key requests coming from your external control plane.
+  CONTROL_PLANE_SECRET: z.string().min(32).optional(),
+  CONTROL_PLANE_HEADER: z.string().default('x-control-plane-key'),
+  CONTROL_PLANE_ALLOWED_IPS: z
+    .string()
+    .default('')
+    .transform((val) => (val ? val.split(',').map((s) => s.trim()).filter(Boolean) : [])),
   REDIS_URL: z.string().url().default('redis://localhost:6379'),
   AUTH_BASE_DIR: z.string().default('/data/auth'),
   MODULE_CONFIG_PATH: z.string().optional(),

@@ -60,6 +60,17 @@ test('public discovery endpoints expose the API contract without authentication'
   assert.equal(versionedOverview.success, true);
   assert.equal(versionedOverview.data.service.basePath, '/api/v1');
   assert.equal(versionedOverview.data.service.preferredBasePath, '/api/v1');
+  assert.equal(versionedOverview.data.links.agent, '/api/v1/agent');
+
+  const agentRes = await app.inject({ method: 'GET', url: '/api/v1/agent' });
+  assert.equal(agentRes.statusCode, 200);
+  const agent = agentRes.json();
+  assert.equal(agent.success, true);
+  assert.equal(agent.data.kind, 'wgs-agent-context/v1');
+  assert.equal(agent.data.links.agent, '/api/v1/agent');
+  assert.ok(agent.data.instructions.some((instruction: string) => instruction.includes('GET /api/v1/agent')));
+  assert.ok(agent.data.taskRoutes.some((route: { path: string }) => route.path.endsWith('/messages/send-text')));
+  assert.ok(agent.data.endpointIndex.some((endpoint: { path: string }) => endpoint.path === '/api/v1/agent'));
 
   const referenceRes = await app.inject({ method: 'GET', url: '/api/reference' });
   assert.equal(referenceRes.statusCode, 200);
@@ -88,6 +99,7 @@ test('public discovery endpoints expose the API contract without authentication'
   assert.equal(docsRes.statusCode, 200);
   assert.match(docsRes.headers['content-type'] ?? '', /text\/html/);
   assert.match(docsRes.body, /Versioned API Surface/);
+  assert.match(docsRes.body, /agent JSON/);
   assert.match(docsRes.body, /\/api\/v1\/reference/);
   assert.match(docsRes.body, /\/api\/v1\/openapi\.json/);
 

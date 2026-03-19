@@ -1,7 +1,8 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { getApiOverview, getApiReference, getOpenApiDocument, LEGACY_API_BASE, renderApiDocsHtml, VERSIONED_API_BASE } from '../api-reference';
+import { getAgentContext, getApiOverview, getApiReference, getOpenApiDocument, LEGACY_API_BASE, renderApiDocsHtml, VERSIONED_API_BASE } from '../api-reference';
 import { isValidAdminSession } from '../admin-auth';
 import { loadConfig } from '../config';
+import { getClientLifecycleStatus } from '../core/client-metadata';
 import { verifyClientKey } from '../core/client-config';
 import { deviceManager } from '../core/device-manager';
 import { resolveInstanceBaseUrl } from '../instance-registry';
@@ -11,6 +12,7 @@ import { registerAccessRoutes } from './access';
 import { registerAdminRoutes } from './admin';
 import { registerChatRoutes } from './chats';
 import { registerConfigRoutes } from './config';
+import { registerControlPlaneRoutes } from './control-plane';
 import { registerContactRoutes } from './contacts';
 import { registerDeviceRoutes } from './devices';
 import { fail, ok } from './helpers';
@@ -57,6 +59,7 @@ function isPublicPath(pathname: string, adminEnabled: boolean): boolean {
   if (pathname === '/') return true;
   for (const apiBase of API_BASES) {
     if (pathname === apiBase) return true;
+    if (pathname === `${apiBase}/agent`) return true;
     if (pathname === `${apiBase}/reference`) return true;
     if (pathname === `${apiBase}/openapi.json`) return true;
     if (pathname === `${apiBase}/status`) return true;
@@ -72,6 +75,26 @@ function isAdminApiPath(pathname: string): boolean {
   return API_BASES.some((apiBase) => pathname.startsWith(`${apiBase}/admin/`));
 }
 
+function normalizeIp(ip: string): string {
+  return ip.replace(/^::ffff:/, '');
+}
+
+function getHeaderValue(request: FastifyRequest, headerName: string): string | undefined {
+  const value = request.headers[headerName.toLowerCase()];
+  if (Array.isArray(value)) return value[0];
+  return value;
+}
+
+function isMasterKeyRequestAllowed(request: FastifyRequest, config: ReturnType<typeof loadConfig>): boolean {
+  const ipAllowed = config.CONTROL_PLANE_ALLOWED_IPS.length === 0
+    || config.CONTROL_PLANE_ALLOWED_IPS.includes(normalizeIp(request.ip));
+
+  if (!ipAllowed) return false;
+  if (!config.CONTROL_PLANE_SECRET) return true;
+
+  return getHeaderValue(request, config.CONTROL_PLANE_HEADER) === config.CONTROL_PLANE_SECRET;
+}
+
 function matchClientId(pathname: string): string | null {
   const match = pathname.match(/^\/api(?:\/v1)?\/clients\/([^/]+)/);
   return match ? decodeURIComponent(match[1]) : null;
@@ -81,8 +104,20 @@ function isDeviceScopedApiPath(pathname: string): boolean {
   return /^\/api(?:\/v1)?\/clients\//.test(pathname) && pathname.includes('/devices/');
 }
 
+function isControlPlanePath(pathname: string): boolean {
+  return /^\/api(?:\/v1)?\/control-plane(?:\/|$)/.test(pathname);
+}
+
+function isClientLifecycleExemptPath(pathname: string, authMode: 'master' | 'client'): boolean {
+  if (isControlPlanePath(pathname)) return true;
+  if (authMode !== 'master') return false;
+  return /^\/api(?:\/v1)?\/clients\/[^/]+\/(config|key(?:\/rotate)?)$/.test(pathname);
+}
+
 async function registerDiscoveryRoutes(app: FastifyInstance, apiBase: typeof API_BASES[number]): Promise<void> {
   app.get(apiBase, async () => ok(getApiOverview(loadConfig().modules, apiBase, VERSIONED_API_BASE)));
+
+  app.get(`${apiBase}/agent`, async () => ok(getAgentContext(loadConfig().modules, apiBase, VERSIONED_API_BASE)));
 
   app.get(`${apiBase}/reference`, async () => ok(getApiReference(loadConfig().modules, apiBase, VERSIONED_API_BASE)));
 
@@ -201,22 +236,51 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
     const masterKey = config.API_KEY;
     const providedKey = request.headers['x-api-key'] as string | undefined;
+    let authMode: 'master' | 'client' | null = null;
 
     if (isAdminApiPath(pathname)) {
-      if (providedKey === masterKey) return;
+      if (providedKey === masterKey) {
+        if (!isMasterKeyRequestAllowed(request, config)) {
+          reply.code(403).send(fail('FORBIDDEN', 'Master key access is restricted to the configured control plane'));
+          return;
+        }
+        return;
+      }
       if (await isValidAdminSession(request)) return;
       reply.code(401).send(fail('UNAUTHORIZED', 'Invalid admin session'));
       return;
     }
 
-    if (providedKey === masterKey) return;
-
-    const clientId = matchClientId(pathname);
-    if (clientId && providedKey) {
-      if (await verifyClientKey(clientId, providedKey, request.ip)) return;
+    if (providedKey === masterKey) {
+      if (!isMasterKeyRequestAllowed(request, config)) {
+        reply.code(403).send(fail('FORBIDDEN', 'Master key access is restricted to the configured control plane'));
+        return;
+      }
+      authMode = 'master';
     }
 
-    reply.code(401).send(fail('UNAUTHORIZED', 'Invalid or missing API key'));
+    const clientId = matchClientId(pathname);
+    if (!authMode && clientId && providedKey) {
+      if (await verifyClientKey(clientId, providedKey, request.ip)) {
+        authMode = 'client';
+      }
+    }
+
+    if (!authMode) {
+      reply.code(401).send(fail('UNAUTHORIZED', 'Invalid or missing API key'));
+      return;
+    }
+
+    if (clientId && !isClientLifecycleExemptPath(pathname, authMode)) {
+      const status = await getClientLifecycleStatus(clientId);
+      if (status !== 'active') {
+        const message = status === 'suspended'
+          ? `Client ${clientId} is suspended. Runtime API access is disabled until the client is reactivated.`
+          : `Client ${clientId} is offboarding. Runtime API access is disabled until the offboarding state is cleared.`;
+        reply.code(403).send(fail('FORBIDDEN', message));
+        return;
+      }
+    }
   });
 
   app.addHook('preHandler', async (request, reply) => {
@@ -228,6 +292,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   for (const apiBase of API_BASES) {
     await registerDiscoveryRoutes(app, apiBase);
+    await registerControlPlaneRoutes(app, apiBase);
     await registerConfigRoutes(app, apiBase);
     await registerDeviceRoutes(app, apiBase);
     await registerMessageRoutes(app, apiBase);

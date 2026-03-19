@@ -1,5 +1,7 @@
 # WhatsApp Gateway — Admin Guide
 
+For the practical step-by-step workflow to add a new paying client to the platform, see [CLIENT_ONBOARDING_PLAYBOOK.md](CLIENT_ONBOARDING_PLAYBOOK.md).
+
 ## Prerequisites
 
 All admin operations require the master API key (`API_KEY` env var). Pass it in every request:

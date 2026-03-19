@@ -32,13 +32,19 @@ export type ClientConfigPatch = {
   maxDevices?: number;
 };
 
-function mergeConfig(base: ClientConfig, patch: ClientConfigPatch): ClientConfig {
+type StoredClientConfig = ClientConfigPatch & Pick<Partial<ClientConfig>, 'apiKeyHash' | 'apiKeyExpiresAt' | 'apiKeyLastUsedAt' | 'apiKeyLastUsedIp'>;
+
+function mergeConfig(base: ClientConfig, patch: StoredClientConfig): ClientConfig {
   const webhookUrl =
     patch.webhookUrl === null ? undefined : (patch.webhookUrl ?? base.webhookUrl);
   const webhookApiKey =
     patch.webhookApiKey === null ? undefined : (patch.webhookApiKey ?? base.webhookApiKey);
 
   const result: ClientConfig = {
+    apiKeyHash: patch.apiKeyHash ?? base.apiKeyHash,
+    apiKeyExpiresAt: patch.apiKeyExpiresAt ?? base.apiKeyExpiresAt,
+    apiKeyLastUsedAt: patch.apiKeyLastUsedAt ?? base.apiKeyLastUsedAt,
+    apiKeyLastUsedIp: patch.apiKeyLastUsedIp ?? base.apiKeyLastUsedIp,
     events: { ...base.events, ...(patch.events ?? {}) },
     chats: {
       ...base.chats,
@@ -71,7 +77,7 @@ class ClientConfigManager {
   async loadConfig(clientId: string): Promise<ClientConfig> {
     const raw = await getRedis().get(this.key(clientId));
     const cfg = raw
-      ? mergeConfig(DEFAULT_CLIENT_CONFIG, JSON.parse(raw))
+      ? mergeConfig(DEFAULT_CLIENT_CONFIG, JSON.parse(raw) as StoredClientConfig)
       : { ...DEFAULT_CLIENT_CONFIG, events: { ...DEFAULT_CLIENT_CONFIG.events }, chats: { ...DEFAULT_CLIENT_CONFIG.chats } };
     this.configs.set(clientId, cfg);
     return cfg;

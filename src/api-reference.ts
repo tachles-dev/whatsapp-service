@@ -44,6 +44,7 @@ export interface ApiReferenceDocument {
   links: {
     overview: string;
     reference: string;
+    agent: string;
     openapi: string;
     docs: string;
     legacyOverview: string;
@@ -82,9 +83,68 @@ export interface OpenApiDocument {
   paths: Record<string, Record<string, unknown>>;
 }
 
+export interface AgentTaskRoute {
+  task: string;
+  method: ApiMethod;
+  path: string;
+  auth: ApiAuthMode;
+  notes: string;
+}
+
+export interface AgentWorkflowStep {
+  title: string;
+  method: ApiMethod;
+  path: string;
+  auth: ApiAuthMode;
+  notes: string;
+  body?: Record<string, unknown>;
+}
+
+export interface AgentWorkflow {
+  id: string;
+  title: string;
+  outcome: string;
+  steps: AgentWorkflowStep[];
+}
+
+export interface AgentRequestExample {
+  id: string;
+  title: string;
+  method: ApiMethod;
+  path: string;
+  headers: Record<string, string>;
+  body?: Record<string, unknown>;
+}
+
+export interface AgentContextDocument {
+  kind: 'wgs-agent-context/v1';
+  service: ApiReferenceDocument['service'] & {
+    sdkPackage: string;
+  };
+  links: ApiReferenceDocument['links'];
+  instructions: string[];
+  auth: {
+    header: 'x-api-key';
+    adminCookie: 'wga_admin';
+    modes: ApiReferenceDocument['auth'];
+  };
+  conventions: {
+    preferredBasePath: string;
+    legacyBasePath: string;
+    requestContentType: 'application/json';
+    responseEnvelope: string[];
+    rateLimitHeaders: string[];
+    pathRules: string[];
+  };
+  taskRoutes: AgentTaskRoute[];
+  workflows: AgentWorkflow[];
+  examples: AgentRequestExample[];
+  endpointIndex: Array<ApiEndpoint & { groupId: string; groupTitle: string }>;
+}
+
 const AUTH_DESCRIPTIONS: ApiReferenceDocument['auth'] = [
   { mode: 'public', description: 'No API key required.' },
-  { mode: 'master-key', description: 'Requires the service master key in the x-api-key header.' },
+  { mode: 'master-key', description: 'Requires the service master key in the x-api-key header. When control-plane restrictions are configured, master-key callers must also satisfy the control-plane header and/or IP policy.' },
   { mode: 'client-key-or-master-key', description: 'Accepts either the master key or the client-specific key for the target client scope.' },
   { mode: 'admin-session-or-master-key', description: 'Accepts either a valid admin session cookie or the master key.' },
 ];
@@ -98,11 +158,28 @@ const GROUPS: ApiGroup[] = [
     endpoints: [
       { method: 'GET', path: '/api', summary: 'Get API overview and discovery links', auth: 'public', scope: 'system' },
       { method: 'GET', path: '/api/reference', summary: 'Get the machine-readable API reference', auth: 'public', scope: 'system' },
+      { method: 'GET', path: '/api/agent', summary: 'Get the coding-agent integration context', auth: 'public', scope: 'system' },
       { method: 'GET', path: '/api/openapi.json', summary: 'Download the OpenAPI 3.1 document', auth: 'public', scope: 'system' },
       { method: 'GET', path: '/api/status', summary: 'Get detailed runtime health snapshot', auth: 'public', scope: 'system' },
       { method: 'GET', path: '/api/status/live', summary: 'Liveness probe', auth: 'public', scope: 'system' },
       { method: 'GET', path: '/api/status/ready', summary: 'Readiness probe', auth: 'public', scope: 'system' },
       { method: 'GET', path: '/', summary: 'Open the generated HTML API reference', auth: 'public', scope: 'system' },
+    ],
+  },
+  {
+    id: 'control-plane',
+    title: 'Control Plane',
+    description: 'Machine-only provisioning and fleet-management workflows for tenant bootstrap, inventory, and lifecycle control.',
+    scope: 'client',
+    endpoints: [
+      { method: 'GET', path: '/api/control-plane/instance', summary: 'Read machine-friendly instance inventory and version data', auth: 'master-key', scope: 'client' },
+      { method: 'GET', path: '/api/control-plane/clients', summary: 'List all clients managed by this instance', auth: 'master-key', scope: 'client' },
+      { method: 'GET', path: '/api/control-plane/clients/:clientId', summary: 'Read full fleet-management detail for one client', auth: 'master-key', scope: 'client' },
+      { method: 'PUT', path: '/api/control-plane/clients/:clientId/metadata', summary: 'Patch plan, contact, notes, tags, and usage limits for a client', auth: 'master-key', scope: 'client', body: ['status?: active | suspended | offboarding', 'plan?: code, name, storageSoftLimitMb', 'contact?: companyName, personName, email, phone', 'limits?: clientSendsPerWindow, deviceSendsPerWindow', 'notes?: string | null', 'tags?: string[]'] },
+      { method: 'POST', path: '/api/control-plane/clients/:clientId/bootstrap', summary: 'Bootstrap a tenant, key, and first device', auth: 'master-key', scope: 'client', body: ['deviceName: string', 'ttlDays?: number', 'rotateKey?: boolean', 'config?: ClientConfigPatch'] },
+      { method: 'GET', path: '/api/control-plane/clients/:clientId/devices/:deviceId/onboarding', summary: 'Read onboarding state with status and QR snapshot', auth: 'master-key', scope: 'client' },
+      { method: 'POST', path: '/api/control-plane/clients/:clientId/devices/:deviceId/reissue-qr', summary: 'Reset auth and request a fresh onboarding QR', auth: 'master-key', scope: 'client' },
+      { method: 'DELETE', path: '/api/control-plane/clients/:clientId', summary: 'Delete a client and all of its devices from this instance', auth: 'master-key', scope: 'client' },
     ],
   },
   {
@@ -288,6 +365,7 @@ function buildReference(modules: ModuleFlags, basePath: string, preferredBasePat
     links: {
       overview: basePath,
       reference: `${basePath}/reference`,
+      agent: `${basePath}/agent`,
       openapi: `${basePath}/openapi.json`,
       docs: '/',
       legacyOverview: LEGACY_API_BASE,
@@ -319,6 +397,284 @@ export function getApiOverview(modules: ModuleFlags, basePath = VERSIONED_API_BA
       scope: group.scope,
       endpoints: group.endpoints.length,
     })),
+  };
+}
+
+export function getAgentContext(modules: ModuleFlags, basePath = VERSIONED_API_BASE, preferredBasePath = VERSIONED_API_BASE): AgentContextDocument {
+  const reference = buildReference(modules, basePath, preferredBasePath);
+  const endpointIndex = reference.groups.flatMap((group) =>
+    group.endpoints.map((endpoint) => ({
+      ...endpoint,
+      groupId: group.id,
+      groupTitle: group.title,
+    })),
+  );
+
+  const taskRoutes: AgentTaskRoute[] = [
+    {
+      task: 'Discover the full contract and versioned base path',
+      method: 'GET',
+      path: `${basePath}/agent`,
+      auth: 'public',
+      notes: 'Start here. This route is optimized for coding agents and links to the reference and OpenAPI exports.',
+    },
+    {
+      task: 'Bootstrap a tenant with its first device and onboarding packet',
+      method: 'POST',
+      path: `${basePath}/control-plane/clients/:clientId/bootstrap`,
+      auth: 'master-key',
+      notes: 'Use this machine-only route from your external control plane instead of chaining client key creation and device creation manually.',
+    },
+    {
+      task: 'Inventory every client on one gateway instance',
+      method: 'GET',
+      path: `${basePath}/control-plane/clients`,
+      auth: 'master-key',
+      notes: 'Use this from your fleet dashboard to enumerate clients, plans, contacts, storage, limits, and device summaries per instance.',
+    },
+    {
+      task: 'Send a normal text message from a connected device',
+      method: 'POST',
+      path: `${basePath}/clients/:clientId/devices/:deviceId/messages/send-text`,
+      auth: 'client-key-or-master-key',
+      notes: 'Prefer jid when already known. Otherwise provide phone digits only and the service will target phone@s.whatsapp.net.',
+    },
+    {
+      task: 'Inspect runtime health for dashboards or deployments',
+      method: 'GET',
+      path: `${basePath}/status`,
+      auth: 'public',
+      notes: 'Use /status/live for liveness and /status/ready only when you explicitly need readiness semantics.',
+    },
+  ];
+
+  if (modules.scheduling) {
+    taskRoutes.push({
+      task: 'Schedule a future outbound text message',
+      method: 'POST',
+      path: `${basePath}/clients/:clientId/devices/:deviceId/messages/schedule-text`,
+      auth: 'client-key-or-master-key',
+      notes: 'sendAt accepts an ISO string, timestamp, or any value that parses cleanly into a date.',
+    });
+  }
+
+  if (modules.admin) {
+    taskRoutes.push({
+      task: 'Read operational stats for an admin control panel',
+      method: 'GET',
+      path: `${basePath}/admin/stats`,
+      auth: 'admin-session-or-master-key',
+      notes: 'For server-to-server integrations, prefer the master key instead of an interactive admin session cookie.',
+    });
+  }
+
+  const workflows: AgentWorkflow[] = [
+    {
+      id: 'bootstrap-tenant',
+      title: 'Bootstrap a new tenant and device',
+      outcome: 'A tenant has a device record, an onboarding QR, and a usable tenant key for app integrations.',
+      steps: [
+        {
+          title: 'Bootstrap the tenant and first device',
+          method: 'POST',
+          path: `${basePath}/control-plane/clients/:clientId/bootstrap`,
+          auth: 'master-key',
+          notes: 'This route creates the device record, returns a plaintext tenant key, and gives you the onboarding polling path.',
+          body: { deviceName: 'primary', ttlDays: 30 },
+        },
+        {
+          title: 'Poll onboarding state until a QR appears',
+          method: 'GET',
+          path: `${basePath}/control-plane/clients/:clientId/devices/:deviceId/onboarding`,
+          auth: 'master-key',
+          notes: 'This route returns both the latest status and the current QR snapshot. Retry until qr is non-null or status becomes CONNECTED.',
+        },
+        {
+          title: 'Poll device status until connected',
+          method: 'GET',
+          path: `${basePath}/clients/:clientId/devices/:deviceId/status`,
+          auth: 'client-key-or-master-key',
+          notes: 'Stop polling once status is CONNECTED. If DISCONNECTED or ERROR persists, use auth/reset or reconnect.',
+        },
+      ],
+    },
+    {
+      id: 'send-message',
+      title: 'Send a first outbound message',
+      outcome: 'A connected device sends a text message to one chat.',
+      steps: [
+        {
+          title: 'Confirm the device is connected',
+          method: 'GET',
+          path: `${basePath}/clients/:clientId/devices/:deviceId/status`,
+          auth: 'client-key-or-master-key',
+          notes: 'Do not attempt send routes before the device reports CONNECTED.',
+        },
+        {
+          title: 'Send the text message',
+          method: 'POST',
+          path: `${basePath}/clients/:clientId/devices/:deviceId/messages/send-text`,
+          auth: 'client-key-or-master-key',
+          notes: 'Provide either jid or phone. The response contains the messageId for follow-up actions.',
+          body: { phone: '15551234567', text: 'Hello from WhatsApp Gateway Service' },
+        },
+      ],
+    },
+  ];
+
+  if (modules.admin) {
+    workflows.push({
+      id: 'admin-observability',
+      title: 'Power an admin or deployment dashboard',
+      outcome: 'An ops surface can show queue, device, and runtime health data without scraping HTML docs.',
+      steps: [
+        {
+          title: 'Read aggregate runtime stats',
+          method: 'GET',
+          path: `${basePath}/admin/stats`,
+          auth: 'admin-session-or-master-key',
+          notes: 'This is the primary dashboard endpoint. It includes load information, queue counts, and device status summaries.',
+        },
+        {
+          title: 'Read configuration and module flags',
+          method: 'GET',
+          path: `${basePath}/admin/runtime`,
+          auth: 'admin-session-or-master-key',
+          notes: 'Use this when a control-plane UI must adapt to runtime modules such as admin or scheduling.',
+        },
+      ],
+    });
+  }
+
+  workflows.push({
+    id: 'fleet-manage-client',
+    title: 'Manage one client from a central fleet control plane',
+    outcome: 'A global admin surface can read and update plan, contact, limits, devices, storage, and lifecycle data for one client on one instance.',
+    steps: [
+      {
+        title: 'Read instance-level inventory',
+        method: 'GET',
+        path: `${basePath}/control-plane/instance`,
+        auth: 'master-key',
+        notes: 'This provides instance identity, version, storage totals, and overall client counts.',
+      },
+      {
+        title: 'Read client detail',
+        method: 'GET',
+        path: `${basePath}/control-plane/clients/:clientId`,
+        auth: 'master-key',
+        notes: 'This returns plan, contact, limits, config, storage, allow/deny lists, and device summaries for one tenant.',
+      },
+      {
+        title: 'Patch client metadata and usage limits',
+        method: 'PUT',
+        path: `${basePath}/control-plane/clients/:clientId/metadata`,
+        auth: 'master-key',
+        notes: 'Use this to update plan, contact details, notes, tags, and per-client message limits without rebuilding the instance.',
+        body: { status: 'active', plan: { code: 'pro' }, contact: { companyName: 'Acme Ltd.' }, limits: { clientSendsPerWindow: 500 } },
+      },
+    ],
+  });
+
+  const examples: AgentRequestExample[] = [
+    {
+      id: 'bootstrap-control-plane',
+      title: 'Bootstrap a tenant from an external control plane',
+      method: 'POST',
+      path: `${basePath}/control-plane/clients/:clientId/bootstrap`,
+      headers: {
+        'x-api-key': '<MASTER_KEY>',
+        'x-control-plane-key': '<CONTROL_PLANE_SECRET_IF_CONFIGURED>',
+        'content-type': 'application/json',
+      },
+      body: { deviceName: 'primary', ttlDays: 90 },
+    },
+    {
+      id: 'list-managed-clients',
+      title: 'List all managed clients on one instance',
+      method: 'GET',
+      path: `${basePath}/control-plane/clients`,
+      headers: {
+        'x-api-key': '<MASTER_KEY>',
+        'x-control-plane-key': '<CONTROL_PLANE_SECRET_IF_CONFIGURED>',
+      },
+    },
+    {
+      id: 'create-device',
+      title: 'Create a device with the master key',
+      method: 'POST',
+      path: `${basePath}/clients/:clientId/devices`,
+      headers: {
+        'x-api-key': '<MASTER_KEY>',
+        'content-type': 'application/json',
+      },
+      body: { name: 'primary' },
+    },
+    {
+      id: 'send-text',
+      title: 'Send a text with a tenant key',
+      method: 'POST',
+      path: `${basePath}/clients/:clientId/devices/:deviceId/messages/send-text`,
+      headers: {
+        'x-api-key': '<CLIENT_KEY_OR_MASTER_KEY>',
+        'content-type': 'application/json',
+      },
+      body: { phone: '15551234567', text: 'Hello from WGS' },
+    },
+  ];
+
+  if (modules.scheduling) {
+    examples.push({
+      id: 'schedule-text',
+      title: 'Schedule a text message',
+      method: 'POST',
+      path: `${basePath}/clients/:clientId/devices/:deviceId/messages/schedule-text`,
+      headers: {
+        'x-api-key': '<CLIENT_KEY_OR_MASTER_KEY>',
+        'content-type': 'application/json',
+      },
+      body: { phone: '15551234567', text: 'Reminder', sendAt: '2026-03-20T09:00:00.000Z' },
+    });
+  }
+
+  return {
+    kind: 'wgs-agent-context/v1',
+    service: {
+      ...reference.service,
+      sdkPackage: reference.service.packageName,
+    },
+    links: reference.links,
+    instructions: [
+      `Start with GET ${basePath}/agent in new integrations. It is the highest-signal route for coding agents.`,
+      `Prefer ${preferredBasePath} for all new clients. ${LEGACY_API_BASE} exists only for compatibility.`,
+      'Treat every JSON response as an envelope with success, timestamp, and either data or error.',
+      'Use x-api-key for all non-public routes. The master key works everywhere; client keys only work within their client scope.',
+      'If the service is configured with control-plane restrictions, all master-key routes also require the configured control-plane header and may be IP allowlisted.',
+      'For admin JSON APIs in backend integrations, prefer the master key over cookie-based admin sessions.',
+      'For message send routes, pass either jid or phone. Phone must be digits only without a leading +.',
+    ],
+    auth: {
+      header: 'x-api-key',
+      adminCookie: 'wga_admin',
+      modes: reference.auth,
+    },
+    conventions: {
+      preferredBasePath,
+      legacyBasePath: LEGACY_API_BASE,
+      requestContentType: 'application/json',
+      responseEnvelope: ['success:boolean', 'timestamp:number', 'data?:unknown', 'error?:{code:string,message:string}'],
+      rateLimitHeaders: ['x-ratelimit-limit', 'x-ratelimit-remaining'],
+      pathRules: [
+        'clientId is the tenant boundary for configuration, keys, access control, and devices.',
+        'deviceId comes from POST /clients/:clientId/devices and scopes all WhatsApp operations.',
+        'jid values are full WhatsApp addresses like 15551234567@s.whatsapp.net or 1203630@g.us.',
+        'phone inputs are bare digits only and are converted server-side into WhatsApp JIDs when needed.',
+      ],
+    },
+    taskRoutes,
+    workflows,
+    examples,
+    endpointIndex,
   };
 }
 
@@ -648,7 +1004,7 @@ export function renderApiDocsHtml(modules: ModuleFlags, basePath = VERSIONED_API
     </div>
     <div class="intro">
       <p>Preferred integration path: <code>${escapeHtml(preferredBasePath)}</code>. Legacy <code>${escapeHtml(LEGACY_API_BASE)}</code> remains available for existing consumers.</p>
-      <p>Discovery: <a href="${escapeHtml(reference.links.reference)}">reference JSON</a> · <a href="${escapeHtml(reference.links.openapi)}">OpenAPI 3.1</a></p>
+      <p>Discovery: <a href="${escapeHtml(reference.links.agent)}">agent JSON</a> · <a href="${escapeHtml(reference.links.reference)}">reference JSON</a> · <a href="${escapeHtml(reference.links.openapi)}">OpenAPI 3.1</a></p>
     </div>
     <nav>${nav}</nav>
   </aside>

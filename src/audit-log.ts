@@ -8,7 +8,7 @@ export interface AuditEvent {
   id: string;
   timestamp: number;
   action: string;
-  actorType: 'admin-session' | 'master-key' | 'client-key' | 'system';
+  actorType: 'admin-session' | 'master-key' | 'client-key' | 'control-plane' | 'system';
   actorId: string;
   ip: string | null;
   clientId?: string;

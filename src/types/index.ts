@@ -506,6 +506,28 @@ export interface ClientConfig {
   maxDevices: number;
 }
 
+export interface ClientMetadata {
+  status: 'active' | 'suspended' | 'offboarding';
+  externalRef?: string;
+  notes?: string;
+  tags: string[];
+  plan?: {
+    code?: string;
+    name?: string;
+    storageSoftLimitMb?: number;
+  };
+  contact?: {
+    companyName?: string;
+    personName?: string;
+    email?: string;
+    phone?: string;
+  };
+  limits?: {
+    clientSendsPerWindow?: number;
+    deviceSendsPerWindow?: number;
+  };
+}
+
 // ── Legacy types (kept for backward compat) ───────────────────────────────
 
 /** @deprecated Use DeviceStatusData */

@@ -9,6 +9,7 @@ import { loadConfig } from '../config';
 import { logger } from '../logger';
 import { clientConfigManager } from './client-config';
 import { AppError } from '../errors';
+import { clientMetadataManager } from './client-metadata';
 
 const MAX_DEVICES_PER_CLIENT = 5;
 void MAX_DEVICES_PER_CLIENT; // used via clientConfig.maxDevices
@@ -281,6 +282,7 @@ class DeviceManager {
     // Preload per-client configs for all known clients
     const uniqueClientIds = [...new Set([...this.infos.values()].map((i) => i.clientId))];
     await Promise.all(uniqueClientIds.map((cid) => clientConfigManager.loadConfig(cid)));
+    await Promise.all(uniqueClientIds.map((cid) => clientMetadataManager.load(cid)));
   }
 
   /** Register a new device for a client. Returns the new device info. */
