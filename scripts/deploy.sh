@@ -7,8 +7,16 @@ set -euo pipefail
 DEPLOY_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$DEPLOY_DIR"
 
+echo "==> Preparing local deployment overrides..."
+touch Caddyfile.local
+
+if ! git diff --quiet -- Caddyfile; then
+  echo "⚠ Local changes detected in tracked Caddyfile."
+  echo "   Move server-specific directives into Caddyfile.local to avoid future pull conflicts."
+fi
+
 echo "==> [1/3] Pulling latest code..."
-git pull
+git pull --rebase --autostash
 
 echo "==> [2/3] Building and restarting containers..."
 docker compose build --pull

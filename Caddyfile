@@ -35,6 +35,12 @@
     fail_duration 30s
   }
 
+  # ── Optional server-local overrides ───────────────────────────────────────
+  # Put environment-specific Caddy directives in ./Caddyfile.local on the
+  # server instead of editing this tracked file. Example uses: extra headers,
+  # IP allowlists, bespoke redirects, or temporary challenge handlers.
+  import /etc/caddy/Caddyfile.local
+
   # ── Security headers ──────────────────────────────────────────────────────
   header {
     # Never expose Caddy or Node version information

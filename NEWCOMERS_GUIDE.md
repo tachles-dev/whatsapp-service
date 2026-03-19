@@ -31,6 +31,8 @@ MODULE_PROFILE=standard
 
 Copy [.env.example](.env.example) to `.env` and fill in the values.
 
+If you need server-specific reverse-proxy tweaks, copy [Caddyfile.local.example](Caddyfile.local.example) to `Caddyfile.local` and edit that file instead of changing the tracked [Caddyfile](Caddyfile). The deploy script preserves `Caddyfile.local` and mounts it automatically.
+
 Minimum required variables for most deployments:
 
 ```env

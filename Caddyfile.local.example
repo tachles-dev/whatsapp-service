@@ -1,0 +1,19 @@
+# Optional server-local Caddy directives.
+#
+# This file is intentionally not tracked once copied to Caddyfile.local.
+# Put environment-specific overrides here instead of editing the tracked
+# Caddyfile, so `bash scripts/deploy.sh` can pull updates cleanly.
+#
+# The contents of this file are imported inside the main site block, so write
+# normal site directives only. Do not add another {$DOMAIN} block.
+
+# Example: restrict the admin UI to a known source range
+# @admin path /admin* /api/admin*
+# handle @admin {
+#   @blocked not remote_ip 203.0.113.0/24
+#   respond @blocked 403
+#   reverse_proxy app:3000
+# }
+
+# Example: add a temporary redirect
+# redir /old-path /new-path 308
