@@ -214,6 +214,51 @@ stop_existing_web_process() {
   fi
 }
 
+read_web_env_value() {
+  local key="$1"
+  local env_file raw_line raw_value
+  for env_file in "$WEB_DIR/.env.local" "$WEB_DIR/.env"; do
+    if [[ ! -f "$env_file" ]]; then
+      continue
+    fi
+    raw_line="$(grep -E "^${key}=" "$env_file" | tail -n 1 || true)"
+    if [[ -z "$raw_line" ]]; then
+      continue
+    fi
+    raw_value="${raw_line#*=}"
+    raw_value="${raw_value%$'\r'}"
+    raw_value="${raw_value#\"}"
+    raw_value="${raw_value%\"}"
+    raw_value="${raw_value#\'}"
+    raw_value="${raw_value%\'}"
+    printf '%s' "$raw_value"
+    return 0
+  done
+  return 1
+}
+
+verify_web_health() {
+  local health_url="http://$WEB_HOSTNAME:$WEB_PORT"
+  local admin_username admin_password
+  admin_username="$(read_web_env_value WGS_ADMIN_UI_USERNAME || true)"
+  admin_password="$(read_web_env_value WGS_ADMIN_UI_PASSWORD || true)"
+
+  if [[ -n "$admin_username" && -n "$admin_password" ]]; then
+    curl -sf -u "$admin_username:$admin_password" "$health_url" >/dev/null
+    return
+  fi
+
+  if [[ -f "$WEB_PID_FILE" ]]; then
+    local web_pid
+    web_pid="$(cat "$WEB_PID_FILE")"
+    if [[ -n "$web_pid" ]] && kill -0 "$web_pid" >/dev/null 2>&1; then
+      return
+    fi
+  fi
+
+  return 1
+}
+
 deploy_web() {
   require_command node
   require_command npm
@@ -239,7 +284,7 @@ deploy_web() {
 
   echo "$web_pid" > "$WEB_PID_FILE"
   sleep 5
-  if ! curl -sf "http://$WEB_HOSTNAME:$WEB_PORT" >/dev/null; then
+  if ! verify_web_health; then
     echo "Internal web control plane failed health check. Check $WEB_LOG_FILE" >&2
     exit 1
   fi
