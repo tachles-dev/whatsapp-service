@@ -108,6 +108,17 @@ Notes:
 
 ### 3. Deploy the gateway
 
+Preferred entry point on the production-ready branch:
+
+```bash
+cd /opt/whatsapp-service
+bash scripts/deploy-production-ready.sh
+```
+
+That wrapper keeps the old root gateway behavior, but also becomes the single operator entry point for the new production-ready layout.
+
+The legacy command still works:
+
 ```bash
 cd /opt/whatsapp-service
 bash scripts/deploy.sh
@@ -249,6 +260,35 @@ WGS_ADMIN_UI_PASSWORD=replace-with-long-random-secret
 ```
 
 ### Deploy steps for `web/`
+
+Preferred single-command deployment on the server:
+
+```bash
+cd /opt/whatsapp-service
+bash scripts/deploy-production-ready.sh --deploy-web --web-install
+```
+
+That command:
+
+- pulls the latest branch unless `--skip-pull` is used
+- builds the internal `web/` app
+- starts it in the background on `127.0.0.1:3300`
+- writes a PID file to `web/.next/wgs-admin.pid`
+- writes logs to `web/.next/wgs-admin.log`
+
+If you want to run only the internal control plane and skip the gateway stack:
+
+```bash
+bash scripts/deploy-production-ready.sh --web-only --deploy-web --web-install
+```
+
+If you want a different local port:
+
+```bash
+bash scripts/deploy-production-ready.sh --deploy-web --web-install --web-port 3400
+```
+
+Manual deploy steps still work when you want finer control:
 
 ```bash
 cd web

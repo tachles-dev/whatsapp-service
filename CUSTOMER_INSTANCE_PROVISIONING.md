@@ -104,11 +104,46 @@ The repository now includes:
 - `deploy/docker-compose.instance.yml`
 - `deploy/caddy.customer-instance.template`
 - `deploy/Caddyfile.edge.example`
+- `scripts/deploy-production-ready.sh`
 - `scripts/provision-instance.sh`
 - `scripts/manage-instance.sh`
 - `scripts/run-provision-job.mjs`
 
 That gives you a repeatable server-side scaffold for a dedicated customer environment.
+
+## Single Deploy Entry Point
+
+If you want one command instead of manually handling the server, use:
+
+```bash
+cd /opt/whatsapp-service
+bash scripts/deploy-production-ready.sh --ensure-edge --deploy-web --web-install
+```
+
+That wrapper can do three jobs in one run:
+
+1. pull and deploy the root gateway stack
+2. create the shared edge snippet directory for customer routes
+3. build and start the server-local `web/` control plane
+
+Useful variants:
+
+```bash
+# only deploy the root gateway stack
+bash scripts/deploy-production-ready.sh
+
+# only deploy the internal server-local control plane
+bash scripts/deploy-production-ready.sh --web-only --deploy-web --web-install
+
+# prepare the shared edge layout without touching the web app
+bash scripts/deploy-production-ready.sh --ensure-edge
+```
+
+The wrapper does not provision customer instances by itself. That remains the job of:
+
+- `scripts/provision-instance.sh`
+- the async job runner
+- or the `/server` management page in `live` mode
 
 ## Provisioning Flow
 
