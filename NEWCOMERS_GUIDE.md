@@ -183,6 +183,8 @@ curl -s "http://localhost:3000/api/clients/acme/devices/<deviceId>/messages/sche
 | Environment template | [.env.example](.env.example) |
 | Module and profile matrix | [MODULES.md](MODULES.md) |
 | Admin and API guide | [ADMIN_GUIDE.md](ADMIN_GUIDE.md) |
+| Production rollout guide | [PRODUCTION_DEPLOYMENT_GUIDE.md](PRODUCTION_DEPLOYMENT_GUIDE.md) |
+| New client app deployment guide | [NEW_APPLICATION_DEPLOYMENT_GUIDE.md](NEW_APPLICATION_DEPLOYMENT_GUIDE.md) |
 | Base compose file | [docker-compose.yml](docker-compose.yml) |
 | Profile compose overrides | [deploy/docker-compose.lite.yml](deploy/docker-compose.lite.yml), [deploy/docker-compose.standard.yml](deploy/docker-compose.standard.yml), [deploy/docker-compose.full.yml](deploy/docker-compose.full.yml) |
 

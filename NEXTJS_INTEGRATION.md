@@ -1,349 +1,416 @@
 # WhatsApp Gateway Service — Next.js Integration Guide
 
-This is the canonical integration guide for a Next.js client application that consumes the WhatsApp Gateway Service.
+This is the current integration guide for using the WhatsApp Gateway Service from a Next.js application.
 
-The current sample implementation in this repository lives in:
+It reflects the repository as it exists now, including:
+
+- server-only gateway access
+- the internal `web/` control-plane app
+- single-instance mode
+- fleet mode with `WGS_FLEET_INSTANCES`
+- server-action-based onboarding
+- per-client management pages
+
+## What This Guide Covers
+
+Use this guide when you are:
+
+1. building a new Next.js application that talks to the gateway
+2. deploying the internal `web/` control-plane app from this repository
+3. upgrading an older Next.js integration to the current gateway contract
+
+## Current Next.js App Shape In This Repository
+
+The active sample implementation now lives in:
 
 - `web/lib/wgs.ts`
-- `web/app/register/actions.ts`
 - `web/app/page.tsx`
 - `web/app/register/page.tsx`
+- `web/app/register/register-form.tsx`
+- `web/app/register/actions.ts`
+- `web/app/fleet/[instanceId]/clients/[clientId]/page.tsx`
+- `web/app/fleet/[instanceId]/clients/[clientId]/client-editor.tsx`
+- `web/proxy.ts`
+
+That app is not a public customer app. It is an internal control surface.
 
 ## Integration Model
 
-The client application should treat the gateway as a server-to-server dependency.
+The gateway should be treated as a server-to-server dependency.
 
-The Next.js app is responsible for:
+Your Next.js app is responsible for:
 
-1. calling the gateway from server-only code
-2. exposing its own internal API routes or server actions to browser clients
-3. receiving webhook events from the gateway
+1. calling the gateway only from server-side code
+2. exposing its own route handlers or server actions to browser clients
+3. receiving webhook events from the gateway when needed
 4. keeping gateway secrets out of the browser bundle
 
-## Setup Scope
+Never call privileged gateway endpoints directly from client components.
 
-This guide covers both:
+## Two Valid Next.js Usage Modes
 
-1. greenfield setup for a new client codebase
-2. migration of an existing client codebase that already talks to the gateway
+There are two valid ways to use Next.js with this product.
+
+### 1. Client application integration
+
+This is a business application that consumes WhatsApp functionality.
+
+Examples:
+
+- CRM inbox app
+- support dashboard
+- nonprofit messaging workflow
+- outbound notification tool
+
+In this mode, the Next.js app usually needs:
+
+- `WGS_URL`
+- `WGS_MASTER_KEY`
+- `WGS_WEBHOOK_SECRET`
+
+### 2. Internal control plane
+
+This is the `web/` app in this repository.
+
+It is an operator-only dashboard that can:
+
+- list instances
+- list clients
+- bootstrap a new client on a chosen instance
+- display storage, quota, and status data
+- update client metadata
+
+In this mode, the Next.js app uses either:
+
+- single-instance env vars, or
+- `WGS_FLEET_INSTANCES` for multi-instance control
 
 ## Environment Variables
 
-Add these to the Next.js app environment, typically `.env.local` for local work and Vercel project env vars in production:
+### A. Client application integration
+
+Use these in the Next.js app environment:
 
 ```env
 WGS_URL=https://your-gateway-domain.example.com
-WGS_MASTER_KEY=same-value-as-API_KEY-in-WGS
-WGS_WEBHOOK_SECRET=same-value-as-WEBHOOK_API_KEY-in-WGS
+WGS_MASTER_KEY=same-value-as-API_KEY-in-the-gateway
+WGS_WEBHOOK_SECRET=same-value-as-WEBHOOK_API_KEY-in-the-gateway
 ```
 
-Gateway-side counterpart:
+Optional:
 
 ```env
-WEBHOOK_URL=https://your-client.vercel.app/api/webhooks/whatsapp
+WGS_API_BASE_PATH=/api/v1
 ```
 
-For the current Amuta deployment target:
+Use `WGS_API_BASE_PATH=/api` only for older gateway deployments that do not expose the versioned API yet.
+
+### B. Internal control plane in single-instance mode
 
 ```env
-WEBHOOK_URL=https://whatsapp-amuta.vercel.app/api/webhooks/whatsapp
+WGS_URL=https://your-gateway-domain.example.com
+WGS_MASTER_KEY=same-value-as-API_KEY-in-the-gateway
+WGS_API_BASE_PATH=/api/v1
+
+WGS_CONTROL_PLANE_HEADER=x-control-plane-key
+WGS_CONTROL_PLANE_SECRET=same-value-as-CONTROL_PLANE_SECRET-in-the-gateway
+
+WGS_ADMIN_UI_USERNAME=admin
+WGS_ADMIN_UI_PASSWORD=replace-with-long-random-secret
 ```
 
-## Expected Responsibilities In The Client App
+### C. Internal control plane in fleet mode
 
-The client codebase should do three things:
+```env
+WGS_FLEET_INSTANCES=[{"id":"eu-1","label":"EU Cluster","baseUrl":"https://wa-eu.example.com","apiKey":"replace-with-master-key","apiBasePath":"/api/v1","controlPlaneSecret":"replace-with-control-plane-secret"},{"id":"us-1","label":"US Cluster","baseUrl":"https://wa-us.example.com","apiKey":"replace-with-master-key"}]
 
-1. receive webhook events from the gateway
-2. call the gateway from server-only code when it needs status, device, chat, or message actions
-3. keep all gateway secrets out of the browser bundle
-
-## Migration Summary
-
-| Area | Old expectation | Current expectation |
-|---|---|---|
-| Gateway mode | Implicit all-in-one runtime | Explicit `MODULE_PROFILE=standard` for most client installs |
-| Webhook target | Client app route path could vary | Use one stable route such as `/api/webhooks/whatsapp` |
-| Client env naming | Mixed `WGS_API_KEY` / `WGS_MASTER_KEY` conventions | Standardize on `WGS_MASTER_KEY` for server-side gateway access |
-| Response envelope | Mixed `ok` or flat payload handling | Parse `success`, `data`, and `error` consistently |
-| Scheduling | Not always available | Only available when the gateway scheduling module is enabled |
-
-## Gateway Response Contract
-
-The gateway returns JSON in this envelope:
-
-```json
-{
-  "success": true,
-  "timestamp": 1770000000000,
-  "data": {}
-}
+WGS_ADMIN_UI_USERNAME=admin
+WGS_ADMIN_UI_PASSWORD=replace-with-long-random-secret
 ```
 
-On failure:
+Optional shared control-plane defaults:
 
-```json
-{
-  "success": false,
-  "timestamp": 1770000000000,
-  "error": {
-    "code": "SOME_CODE",
-    "message": "Human-readable message"
-  }
-}
+```env
+WGS_CONTROL_PLANE_HEADER=x-control-plane-key
+WGS_CONTROL_PLANE_SECRET=replace-with-long-random-secret
 ```
 
-Your Next.js helper should parse `success`, `data`, and `error.message`.
+## What The Current `web/` App Does
 
-## Server-Only Gateway Helper
+The internal `web/` app is now a fleet-aware control surface.
 
-Put the gateway integration behind a server-only helper such as `lib/wgs.ts`.
+### Dashboard
 
-```ts
-import 'server-only';
+`web/app/page.tsx` is a Server Component dashboard that:
 
-const BASE = process.env.WGS_URL!;
-const KEY = process.env.WGS_MASTER_KEY!;
+1. loads instance inventory server-side
+2. aggregates clients, devices, quota usage, and auth storage
+3. shows instance-level errors without exposing secrets to the browser
 
-interface GatewayResponse<T> {
-  success: boolean;
-  timestamp: number;
-  data?: T;
-  error?: {
-    code: string;
-    message: string;
-  };
-}
+It uses ISR with `revalidate = 10` for a low-friction operator dashboard.
 
-async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { 'x-api-key': KEY },
-    cache: 'no-store',
-  });
+### Registration
 
-  const json: GatewayResponse<T> = await res.json();
-  if (!json.success) {
-    throw new Error(json.error?.message ?? `WGS error on GET ${path}`);
-  }
+`web/app/register/actions.ts` performs an internal onboarding workflow:
 
-  return json.data as T;
-}
+1. choose the target instance
+2. create the client namespace
+3. create the first device
+4. issue the first client API key
+5. optionally save company, contact, plan, and tags metadata
+6. fetch the onboarding QR
+7. convert the QR to an image data URL for display
 
-async function post<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: {
-      'x-api-key': KEY,
-      'content-type': 'application/json',
-    },
-    body: body ? JSON.stringify(body) : undefined,
-    cache: 'no-store',
-  });
+This flow is server-only and does not expose the gateway master key to the browser.
 
-  const json: GatewayResponse<T> = await res.json();
-  if (!json.success) {
-    throw new Error(json.error?.message ?? `WGS error on POST ${path}`);
-  }
+### Per-client management
 
-  return json.data as T;
-}
-```
+`web/app/fleet/[instanceId]/clients/[clientId]/page.tsx` loads one managed client and shows:
+
+- metadata
+- config snapshot
+- device list
+- quota usage
+- auth storage
+- allowlist and banlist data
+
+`client-editor.tsx` updates metadata through a server action.
+
+## Server-Only Gateway Helper Pattern
+
+Put gateway access behind a server-only helper like `web/lib/wgs.ts`.
+
+The current helper supports:
+
+- single-instance fallback with `WGS_URL` and `WGS_MASTER_KEY`
+- fleet mode via `WGS_FLEET_INSTANCES`
+- optional control-plane headers
+- `/api/v1` fallback to `/api` when needed
+- server-only fetches using `cache: 'no-store'`
 
 Rules:
 
-- import this helper only from Server Components, Route Handlers, or Server Actions
-- never expose `WGS_MASTER_KEY` to client components
-- prefer `cache: 'no-store'` for operator/admin data
-- if you want a cached dashboard, apply caching at the Next.js route or page level, not in the browser
+- import the helper only from Server Components, Route Handlers, or Server Actions
+- never import it from client components
+- never pass `WGS_MASTER_KEY` to the browser
 
-If older code still uses `WGS_API_KEY`, replace it with `WGS_MASTER_KEY` in server-only gateway helper code.
+## Security Model
 
-## Common Next.js Patterns
+### 1. Gateway secrets stay server-side
 
-### 1. Server-rendered admin dashboard
+Keep these out of browser code:
 
-The sample app uses a Server Component dashboard in `web/app/page.tsx` that calls the gateway on the server and renders device and queue stats.
+- `WGS_MASTER_KEY`
+- `WGS_CONTROL_PLANE_SECRET`
+- `WGS_WEBHOOK_SECRET`
 
-This is the right pattern for:
+### 2. Protect the internal `web/` app
 
-- operator dashboards
-- internal admin views
-- device health screens
-- queue visibility
+The built-in control plane is protected by HTTP Basic auth in `web/proxy.ts`.
 
-### 2. Server Action onboarding flow
+Required env vars:
 
-The sample registration flow in `web/app/register/actions.ts` performs:
+- `WGS_ADMIN_UI_USERNAME`
+- `WGS_ADMIN_UI_PASSWORD`
 
-1. client key creation
-2. first device creation
-3. QR retrieval
-4. QR conversion to an image data URL for rendering
+If those are missing, the app fails closed.
 
-This is the preferred pattern for onboarding an operator without leaking the gateway master key.
+### 3. Protect the gateway master key path
 
-### 3. Route handlers as an internal boundary
+If the gateway uses:
 
-When browser clients need WhatsApp-related data, expose it from your own Next.js route handlers instead of calling the gateway directly from the browser.
+- `CONTROL_PLANE_SECRET`
+- `CONTROL_PLANE_HEADER`
+- `CONTROL_PLANE_ALLOWED_IPS`
 
-Good examples:
+then the Next.js control plane must send the correct control-plane header for master-key requests.
 
-- `app/api/whatsapp/status/route.ts`
-- `app/api/whatsapp/chats/route.ts`
-- `app/api/whatsapp/qr/route.ts`
-- app-specific send or reply routes
+## Webhook Route Expectations
 
-## Registration Flow
-
-If the client app includes an operator onboarding flow, follow the pattern in `web/app/register/actions.ts`:
-
-1. create a client key
-2. create the first device
-3. fetch the QR code
-4. render the QR as an image for pairing
-
-This keeps the gateway master key on the server and gives the client application a controlled onboarding path.
-
-## Webhook Route
-
-The client app should expose:
+A client application should expose:
 
 ```text
 app/api/webhooks/whatsapp/route.ts
 ```
 
-Minimal implementation:
+Minimum requirements:
 
-```ts
-import { NextResponse } from 'next/server';
+1. validate the webhook secret
+2. return quickly
+3. move heavy work into background jobs if necessary
+4. make processing idempotent when your product requires replay safety
 
-const WGS_WEBHOOK_SECRET = process.env.WGS_WEBHOOK_SECRET!;
-
-export async function POST(request: Request) {
-  const apiKey = request.headers.get('x-api-key');
-  if (apiKey !== WGS_WEBHOOK_SECRET) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  const body = await request.json();
-
-  if (body.type === 'heartbeat') {
-    return NextResponse.json({ ok: true });
-  }
-
-  // Process inbound WhatsApp events here.
-  return NextResponse.json({ ok: true });
-}
-```
-
-Requirements:
-
-- validate the `x-api-key` header
-- return quickly with `200`
-- move heavy downstream work into background jobs if needed
-- make the handler idempotent if the client product requires replay safety
-
-For the current client rollout, the intended webhook target is:
+Typical gateway-side setting:
 
 ```env
-WEBHOOK_URL=https://whatsapp-amuta.vercel.app/api/webhooks/whatsapp
+WEBHOOK_URL=https://your-app.example.com/api/webhooks/whatsapp
+WEBHOOK_API_KEY=replace-with-long-random-secret
 ```
 
-## Typical Gateway Calls From Next.js
+Matching Next.js app env:
 
-Examples you are likely to need:
+```env
+WGS_WEBHOOK_SECRET=same-value-as-WEBHOOK_API_KEY-in-the-gateway
+```
 
-- `GET /api/status` for public health and readiness summaries
-- `GET /api/admin/stats` for operator dashboards
-- `POST /api/clients/:clientId/key` to issue a client API key
-- `POST /api/clients/:clientId/devices` to create a device
-- `GET /api/clients/:clientId/devices/:deviceId/auth/qr` to fetch the pairing QR
-- `GET /api/clients/:clientId/devices/:deviceId/chats` for searchable contacts and chats
+## Typical Gateway Operations From Next.js
 
-Use the master key only from trusted server-side code.
+For client applications, common server-side gateway calls include:
 
-If your product needs tenant-scoped device operations after onboarding, you can also issue a tenant client key and use that for restricted server-to-server requests.
+- status or stats fetches
+- chat and contact lookup
+- QR retrieval during onboarding
+- outbound messaging actions
 
-## Migration Steps For Existing Client Apps
+For the internal control plane, common server-side operations include:
 
-1. Update environment variables to `WGS_URL`, `WGS_MASTER_KEY`, and `WGS_WEBHOOK_SECRET`.
-2. Normalize the client webhook route to `/api/webhooks/whatsapp`, or point `WEBHOOK_URL` at the real route.
-3. Move any privileged browser-side gateway calls into server-only code.
-4. Update gateway helpers to parse the `success` response envelope instead of legacy `ok` handling.
-5. Treat scheduling as optional and only surface scheduling UI when the gateway runtime exposes it.
-6. Re-test status fetch, chat listing, QR retrieval, and outbound send flows.
+- instance inventory
+- client inventory
+- managed client detail
+- metadata updates
+- bootstrap onboarding
 
-## Optional Features And Runtime Awareness
+## Fleet Mode Behavior
 
-Do not assume scheduling routes always exist.
+When `WGS_FLEET_INSTANCES` is set, the internal control-plane app:
 
-If the client product uses scheduled sends, verify the gateway is running with scheduling enabled before surfacing those UI features.
+1. builds one typed gateway client per instance
+2. fetches instance and client inventory server-side
+3. surfaces per-instance online or error state on the dashboard
+4. routes registration and management actions to the selected instance
+
+If `WGS_FLEET_INSTANCES` is not set, the app falls back to a single instance using:
+
+- `WGS_URL`
+- `WGS_MASTER_KEY`
+
+## Registration Flow For A Controlled Operator App
+
+The current recommended pattern for operator onboarding is:
+
+1. render a controlled internal form
+2. submit to a server action
+3. bootstrap the tenant server-side
+4. fetch the QR server-side
+5. render the QR in the app
+
+Do not send the built-in registration page to end customers.
+
+It is an admin helper, not a public sign-up workflow.
+
+## Scheduling And Runtime Awareness
+
+Do not assume scheduling is always enabled.
+
+If your Next.js product exposes scheduled-send features, first confirm the gateway runtime supports them.
 
 Recommended check:
 
-1. call `/api/admin/runtime` from server code or inspect the gateway admin dashboard
-2. inspect `modules.scheduling`
-3. show or hide scheduling UI accordingly
+1. inspect the gateway runtime or admin surface
+2. confirm scheduling is enabled
+3. only then show scheduling UI
 
-The gateway dashboard itself now uses admin credentials and server-side session cookies. That mostly affects operators using the gateway dashboard directly. The client codebase should still use server-side API calls with `WGS_MASTER_KEY` where appropriate.
-
-## Security Requirements
-
-- keep `WGS_MASTER_KEY` server-only
-- keep `WGS_WEBHOOK_SECRET` server-only
-- do not fetch privileged gateway endpoints from client-side React components
-- protect your own Next.js routes with your application auth layer
-- validate all inbound webhook requests before processing them
+The same rule applies to multi-instance assumptions: do not build fleet-only UI unless you actually have multiple gateway instances configured.
 
 ## Deployment Notes
 
-Recommended gateway mode for most client apps:
+### Gateway
+
+For most application integrations, deploy the gateway with:
 
 ```env
 MODULE_PROFILE=standard
 ```
 
-That is the intended single-node profile.
+Move to `full` only when you intentionally need multi-instance leasing and owner forwarding.
 
-Do not set `INSTANCE_BASE_URL` unless you are intentionally deploying a multi-instance gateway topology with owner forwarding enabled.
+### Internal control plane
+
+Deploy `web/` as a separate Next.js app.
+
+It is not part of the gateway Compose stack by default.
+
+Typical targets:
+
+- Vercel
+- a separate containerized Next.js deployment
+- a separate Node process behind a reverse proxy
+
+### Build validation
+
+For the internal app:
+
+```bash
+cd web
+npm install
+npm run build
+```
 
 ## Verification Checklist
 
-After wiring the integration:
+### For a client application
 
-1. confirm the Next.js app can call `GET /api/admin/stats` from server code
-2. confirm the registration flow can create a client key and first device
-3. confirm QR retrieval works
-4. confirm the webhook route accepts a valid signed POST
-5. confirm a real inbound WhatsApp event reaches the client app
-6. confirm outbound send or chat lookup flows work from the client app
+Verify all of these:
 
-For an existing client migration, also validate:
+1. the app can call the gateway from server-side code
+2. the webhook route accepts valid requests
+3. the webhook route rejects invalid secrets
+4. QR retrieval works in the onboarding flow
+5. outbound message or chat lookup flows work
+6. a real inbound WhatsApp event reaches the app
 
-1. webhook route returns `401` for an invalid secret
-2. no browser component calls privileged gateway endpoints directly
-3. any scheduling UI is hidden when the runtime module is disabled
+### For the internal control plane
+
+Verify all of these:
+
+1. HTTP Basic auth blocks unauthenticated access
+2. the dashboard loads data from the configured instance or fleet
+3. the registration flow creates a client and first device
+4. the client detail page loads metadata and devices
+5. metadata updates persist through the control-plane APIs
 
 ## Recommended Final State
 
-For a normal single-node client integration, the intended setup is:
+### New client application
 
 Gateway:
 
 ```env
 MODULE_PROFILE=standard
-WEBHOOK_URL=https://whatsapp-amuta.vercel.app/api/webhooks/whatsapp
+WEBHOOK_URL=https://your-app.example.com/api/webhooks/whatsapp
+WEBHOOK_API_KEY=replace-with-long-random-secret
 ```
 
-Client app:
+App:
 
 ```env
 WGS_URL=https://your-gateway-domain.example.com
-WGS_MASTER_KEY=same-value-as-API_KEY-in-WGS
-WGS_WEBHOOK_SECRET=same-value-as-WEBHOOK_API_KEY-in-WGS
+WGS_MASTER_KEY=same-value-as-API_KEY-in-the-gateway
+WGS_WEBHOOK_SECRET=same-value-as-WEBHOOK_API_KEY-in-the-gateway
 ```
 
-Leave `INSTANCE_BASE_URL` unset unless you are deliberately moving the gateway to a multi-instance topology.
+### Internal control plane for one gateway
+
+```env
+WGS_URL=https://your-gateway-domain.example.com
+WGS_MASTER_KEY=same-value-as-API_KEY-in-the-gateway
+WGS_CONTROL_PLANE_SECRET=same-value-as-CONTROL_PLANE_SECRET-in-the-gateway
+WGS_ADMIN_UI_USERNAME=admin
+WGS_ADMIN_UI_PASSWORD=replace-with-long-random-secret
+```
+
+### Internal control plane for many gateways
+
+```env
+WGS_FLEET_INSTANCES=[{"id":"eu-1","label":"EU Cluster","baseUrl":"https://wa-eu.example.com","apiKey":"replace-with-master-key","apiBasePath":"/api/v1","controlPlaneSecret":"replace-with-control-plane-secret"}]
+WGS_ADMIN_UI_USERNAME=admin
+WGS_ADMIN_UI_PASSWORD=replace-with-long-random-secret
+```
 
 ## Related Documents
 
+- `PRODUCTION_DEPLOYMENT_GUIDE.md`
+- `NEW_APPLICATION_DEPLOYMENT_GUIDE.md`
+- `CLIENT_CODEBASE_MIGRATION.md`
 - `.env.example`
+- `web/.env.example`
