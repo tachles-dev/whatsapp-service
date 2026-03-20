@@ -1,0 +1,12 @@
+services:
+  app:
+    env_file:
+      - ${INSTANCE_ENV_FILE}
+    ports:
+      - "127.0.0.1:${INSTANCE_APP_PORT}:3000"
+
+  caddy:
+    profiles: ["disabled"]
+
+  redisinsight:
+    profiles: ["disabled"]

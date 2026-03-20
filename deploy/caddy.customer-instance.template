@@ -1,0 +1,23 @@
+{$CUSTOMER_DOMAIN} {
+  encode zstd gzip
+
+  reverse_proxy 127.0.0.1:{$INSTANCE_APP_PORT} {
+    health_uri /api/status/live
+    health_interval 10s
+    health_timeout 5s
+    fail_duration 30s
+  }
+
+  header {
+    -Server
+    Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+    X-Content-Type-Options nosniff
+    Referrer-Policy strict-origin-when-cross-origin
+  }
+
+  log {
+    output stdout
+    format json
+    level INFO
+  }
+}

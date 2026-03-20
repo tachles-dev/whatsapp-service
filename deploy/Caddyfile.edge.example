@@ -1,0 +1,9 @@
+{
+  email ops@example.com
+}
+
+admin.localhost {
+  reverse_proxy 127.0.0.1:3300
+}
+
+import /etc/caddy/customer-instances/*.caddy
