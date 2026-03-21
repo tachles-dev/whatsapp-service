@@ -119,9 +119,11 @@ async function registerDiscoveryRoutes(app: FastifyInstance, apiBase: typeof API
 
   app.get(`${apiBase}/agent`, async () => ok(getAgentContext(loadConfig().modules, apiBase, VERSIONED_API_BASE)));
 
-  app.get(`/skill.md`, async (_request, reply) => {
-    reply.type('text/markdown').send(renderAgentSkillMarkdown(loadConfig().modules, VERSIONED_API_BASE, VERSIONED_API_BASE));
-  });
+  if (apiBase === VERSIONED_API_BASE) {
+    app.get(`/skill.md`, async (_request, reply) => {
+      reply.type('text/markdown').send(renderAgentSkillMarkdown(loadConfig().modules, VERSIONED_API_BASE, VERSIONED_API_BASE));
+    });
+  }
 
   app.get(`${apiBase}/skill.md`, async (_request, reply) => {
     reply.type('text/markdown').send(renderAgentSkillMarkdown(loadConfig().modules, apiBase, VERSIONED_API_BASE));
