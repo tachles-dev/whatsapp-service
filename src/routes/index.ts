@@ -1,5 +1,5 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { getAgentContext, getApiOverview, getApiReference, getOpenApiDocument, LEGACY_API_BASE, renderApiDocsHtml, VERSIONED_API_BASE } from '../api-reference';
+import { getAgentContext, renderAgentSkillMarkdown, getApiOverview, getApiReference, getOpenApiDocument, LEGACY_API_BASE, renderApiDocsHtml, VERSIONED_API_BASE } from '../api-reference';
 import { isValidAdminSession } from '../admin-auth';
 import { loadConfig } from '../config';
 import { getClientLifecycleStatus } from '../core/client-metadata';
@@ -118,6 +118,14 @@ async function registerDiscoveryRoutes(app: FastifyInstance, apiBase: typeof API
   app.get(apiBase, async () => ok(getApiOverview(loadConfig().modules, apiBase, VERSIONED_API_BASE)));
 
   app.get(`${apiBase}/agent`, async () => ok(getAgentContext(loadConfig().modules, apiBase, VERSIONED_API_BASE)));
+
+  app.get(`/skill.md`, async (_request, reply) => {
+    reply.type('text/markdown').send(renderAgentSkillMarkdown(loadConfig().modules, VERSIONED_API_BASE, VERSIONED_API_BASE));
+  });
+
+  app.get(`${apiBase}/skill.md`, async (_request, reply) => {
+    reply.type('text/markdown').send(renderAgentSkillMarkdown(loadConfig().modules, apiBase, VERSIONED_API_BASE));
+  });
 
   app.get(`${apiBase}/reference`, async () => ok(getApiReference(loadConfig().modules, apiBase, VERSIONED_API_BASE)));
 

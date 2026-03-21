@@ -1033,3 +1033,38 @@ export function renderApiDocsHtml(modules: ModuleFlags, basePath = VERSIONED_API
 </body>
 </html>`;
 }
+
+export function renderAgentSkillMarkdown(modules: ModuleFlags, basePath = VERSIONED_API_BASE, preferredBasePath = VERSIONED_API_BASE): string {
+  const reference = buildReference(modules, basePath, preferredBasePath);
+  const endpoints = reference.groups.flatMap((g) => g.endpoints.map(e => `- **${e.method}** \`${e.path}\`: ${e.summary} (Auth: ${e.auth})`)).join('\n');
+  
+  return `---
+name: whatsapp-service-integration
+description: Helps external applications integrate with this WhatsApp Service instance. Use this skill when asked to write code to send WhatsApp messages, configure webhooks, or manage WhatsApp devices via API.
+---
+# WhatsApp Service Integration Skill
+
+This skill provides the structure for integrating with the WhatsApp service API.
+
+## Base Paths
+- Preferred: \`${preferredBasePath}\`
+- Agent Discovery: \`${preferredBasePath}/agent\`
+- OpenAPI: \`${preferredBasePath}/openapi.json\`
+
+## Authentication
+- **master-key**: Requires global master x-api-key header.
+- **client-key**: Requires tenant-specific x-api-key generated during bootstrap.
+
+## Standard Endpoint Envelopes
+Success: \`{ "success": true, "timestamp": 1234567, "data": { ... } }\`
+Error: \`{ "success": false, "timestamp": 1234567, "error": { "code": "ERR_CODE", "message": "..." } }\`
+
+## Target Address Handling
+For all messaging endpoints, target exactly one of these payload formats:
+- \`phone\`: Digits only (e.g. "15551234567")
+- \`jid\`: Jabber ID (e.g. "15551234567@s.whatsapp.net" or "123456@g.us")
+
+## Available Endpoints
+${endpoints}
+`;
+}
